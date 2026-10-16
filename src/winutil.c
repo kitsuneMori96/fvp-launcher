@@ -123,3 +123,14 @@ int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeou
     if (fail_step) *fail_step = NULL;
     return 1;
 }
+
+fvpl_uint FvplHostAcp(void) {
+    typedef UINT (WINAPI *PFN_GETACP)(void);
+    static PFN_GETACP pfn;
+    HMODULE k;
+    if (pfn) return (fvpl_uint)pfn();
+    k = GetModuleHandleA("kernel32.dll");
+    if (k) pfn = (PFN_GETACP)(void *)GetProcAddress(k, "GetACP");
+    if (pfn) return (fvpl_uint)pfn();
+    return 1252;   /* 理论上到不了: kernel32 一定导出 GetACP */
+}

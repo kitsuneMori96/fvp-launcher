@@ -33,12 +33,21 @@ typedef struct {
     int        n_folder_ids;
 
     /* [nls] */
-    fvpl_uint  codepage;        /* 虚拟 ACP: 引擎 ANSI 字节串按此解释 */
+    fvpl_uint  codepage;        /* 系统/路径层: 虚拟 ACP, 引擎的 ANSI 路径按此解释 */
+    fvpl_uint  text_codepage;   /* 文本层: 0 = 与 codepage 相同 (不做文本层转换);
+                                 * 显式值 = 游戏台词/标题所用码页 (日文原版 932)。
+                                 * 只影响文本/字体/字形 API, GetACP 与文件路径仍用 codepage */
     fvpl_uint  font_charset;    /* GDI charset, 128=SHIFTJIS 134=GB2312 136=Big5 */
+    fvpl_wchar font_face[64];   /* 非空 = 连字型一起强制 (最多 31 字符) */
     int        virtualize_files;
     int        virtualize_ui;
     fvpl_uint  lcid;            /* 0 = 不动 CompareStringA 的 locale */
 } FvplConfig;
+
+/* 宿主进程真实 ANSI 码页 (Windows 侧用 FvplHostAcp() 取, 见 winutil.h)。
+ * 不写 [nls] 时 codepage/font_charset 就按它推导 —— 纯逻辑模块不能 include
+ * windows.h, 所以由调用方在 cfg_build 之前注入。0 = 保持内置默认 (932)。 */
+void cfg_set_host_acp(fvpl_uint cp);
 
 int  cfg_ini_parse(const fvpl_wchar *text, FvplIni *ini);
 const fvpl_wchar *cfg_ini_get(const FvplIni *ini, const fvpl_wchar *sec, const fvpl_wchar *key);

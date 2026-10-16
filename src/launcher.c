@@ -9,6 +9,7 @@
 #include "pathutil.h"
 #include "peinfo.h"
 #include "winutil.h"
+#include "wizard.h"
 
 #if defined(__x86_64__) || defined(_M_X64)
 #define OWN_MACHINE FVPL_MACHINE_AMD64
@@ -156,6 +157,52 @@ static int auto_detect(const WCHAR *basedir, const WCHAR *self_name, WCHAR *out,
     return pv_copy(out, outcch, chosen);
 }
 
+/* PE 资源语言 -> 游戏文本码页 (0 = 认不出, 交给用户在界面上选) */
+static int lang_to_cp(int langid) {
+    switch (langid) {
+    case 0x0411: return 932;                 /* ja        */
+    case 0x0804: case 0x1004: return 936;    /* zh-CN/SG  */
+    case 0x0404: case 0x0c04: return 950;    /* zh-TW/HK  */
+    case 0x0412: return 949;                 /* ko        */
+    default: return 0;
+    }
+}
+
+/* 首次设定界面的候选: 目录里所有同位数 exe(跳过启动器自己), 记下是否 FVP 指纹、
+ * 检测出的文本码页。FVP 命中的排前面, 组内保持目录顺序; 最多 WIZ_MAX_CAND 个。 */
+static int scan_candidates(const WCHAR *basedir, const WCHAR *self_name, WizCand *out) {
+    WCHAR pat[FVPL_MAX_PATH], full[FVPL_MAX_PATH];
+    WIN32_FIND_DATAW fd;
+    WizCand tmp[WIZ_MAX_CAND];
+    HANDLE h;
+    int n = 0, k = 0, i;
+
+    if (!pv_join(pat, FVPL_MAX_PATH, basedir, L"*.exe")) return 0;
+    h = FindFirstFileW(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        unsigned char *blob;
+        unsigned int size;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (self_name && _wcsicmp(fd.cFileName, self_name) == 0) continue;
+        if (n >= WIZ_MAX_CAND) break;
+        if (!pv_join(full, FVPL_MAX_PATH, basedir, fd.cFileName)) continue;
+        if (!read_blob(full, &blob, &size)) continue;
+        if (pe_machine(blob, size) == (int)OWN_MACHINE) {
+            pv_copy(tmp[n].path, FVPL_MAX_PATH, full);
+            tmp[n].is_fvp = pe_has_import(blob, size, "shell32.dll", "SHGetFolderPathA");
+            tmp[n].cp = lang_to_cp(pe_resource_lang(blob, size));
+            n++;
+        }
+        HeapFree(GetProcessHeap(), 0, blob);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+
+    for (i = 0; i < n; i++) if (tmp[i].is_fvp) out[k++] = tmp[i];
+    for (i = 0; i < n; i++) if (!tmp[i].is_fvp) out[k++] = tmp[i];
+    return k;
+}
+
 static void base_name(const WCHAR *path, WCHAR *name, int cch) {
     int i = pv_len(path);
     while (i > 0 && path[i - 1] != L'\\' && path[i - 1] != L'/') i--;
@@ -225,6 +272,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     unsigned int size;
     DWORD machine;
     int i, n, cap;
+    int want_setup = 0;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
@@ -254,10 +302,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
                 LocalFree(argv);
                 return rc;
             }
+            /* --setup = 弹一次首次设定界面（可选; 平时不需要, 没有 ini 就用自动推断的默认值跑） */
+            for (i = 1; i < argc; i++) {
+                if (lstrcmpW(argv[i], L"--setup") == 0) want_setup = 1;
+            }
             LocalFree(argv);
         }
     }
 
+    cfg_set_host_acp(FvplHostAcp());
     for (i = 0; i < FVPL_INI_MAXENTRY; i++) { ini.ent[i].sec[0] = 0; ini.ent[i].key[0] = 0; }
     ini.n = 0;
     if (FvplLoadIniText(basedir, text, 8192)) cfg_ini_parse(text, &ini);
@@ -274,6 +327,35 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         if (bad) box(MB_ICONWARNING,
             L"fvp-launcher.ini 里有看不懂的设置：\n%s\n\n本次先用默认设置启动。\n"
             L"（可以删掉这个文件重新开始，或对照 fvp-launcher.ini.example 检查。）", err);
+    }
+
+    /* 没有配置文件（或用户要 --setup）: 先把自动推断出来的设置摆出来让用户确认一次。
+     * 一切正常时这一步只是确认；没有这道界面时，用户就只能靠记事本猜参数了。 */
+    /* 首次设定界面只在显式 --setup 时出现: 不给 Hermit 这种"每作品自己填 ini"的用法添麻烦,
+     * 没 ini 就直接用自动推断的默认值跑。 */
+    if (want_setup) {
+        static WizCand cand[WIZ_MAX_CAND];
+        WCHAR presel[FVPL_MAX_PATH];
+        int nc;
+
+        nc = scan_candidates(basedir, self_name, cand);
+        if (nc > 0) {
+            presel[0] = 0;
+            if (cfg.target[0]) {
+                if (pv_is_abs(cfg.target)) pv_copy(presel, FVPL_MAX_PATH, cfg.target);
+                else pv_join(presel, FVPL_MAX_PATH, basedir, cfg.target);
+            } else {
+                auto_detect(basedir, self_name, presel, FVPL_MAX_PATH);
+            }
+            if (WizardRun(basedir, cand, nc, presel[0] ? presel : NULL, &cfg)) {
+                alog(L"首次设定: 已确认, 设置写入 fvp-launcher.ini");
+            } else {
+                alog(L"首次设定: 用户点了取消, 直接退出");
+                return 0;
+            }
+        } else {
+            alog(L"首次设定: 这个文件夹里没扫到同位数的主程序, 跳过界面");
+        }
     }
 
     if (cfg.target[0]) {

@@ -131,6 +131,34 @@ static const fvpl_wchar SEC_LAU[] = { L'l','a','u','n','c','h','e','r',0 };
 static const fvpl_wchar SEC_SAVE[] = { L's','a','v','e',0 };
 static const fvpl_wchar SEC_NLS[] = { L'n','l','s',0 };
 
+/* ---- 宿主码页与 NLS 默认值 ------------------------------------------------
+ * 「本机码页」= 宿主进程真实的 ANSI 码页 (中文 Windows 通常是 936), 由调用方
+ * 用 cfg_set_host_acp() 注入 (纯逻辑模块不能 include windows.h)。
+ * 没写 [nls] 时就用它: 谎报一个宿主并不使用的码页, 会让非 ASCII 路径在
+ * A↔W 往返时被改写成别的字节, 游戏自己开资源就会失败。 */
+static fvpl_uint g_host_acp = 932;
+
+void cfg_set_host_acp(fvpl_uint cp) {
+    if (cp) g_host_acp = cp;
+}
+
+/* 整行删掉 / 留空 / 写 auto = 用本机码页自动推断 */
+static int ci_is_auto(const fvpl_wchar *v) {
+    return !v || !*v || ci_eq(v, L"auto");
+}
+
+/* GDI charset: 和 codepage 配套, CreateFontA 造出来的字体才不会选错字库 */
+static fvpl_uint ci_charset_of(fvpl_uint cp) {
+    switch (cp) {
+    case 932:  return 128;  /* SHIFTJIS_CHARSET */
+    case 936:  return 134;  /* GB2312_CHARSET */
+    case 949:  return 129;  /* HANGUL_CHARSET */
+    case 950:  return 136;  /* CHINESEBIG5_CHARSET */
+    case 1252: return 0;    /* ANSI_CHARSET */
+    default:   return 1;    /* DEFAULT_CHARSET: 系统按当前区域自己挑 */
+    }
+}
+
 int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
               fvpl_wchar *err, int errcch) {
     const fvpl_wchar *s;
@@ -158,21 +186,18 @@ int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
             (s && *s) ? s : DEF_MIGRATE);
 
     s = cfg_ini_get(ini, SEC_SAVE, L"path");
-    if (!s || !*s) s = L"userdata";
+    if (!s || !*s) s = L".save";
     if (pv_is_abs(s)) pv_copy(out->save_path, FVPL_MAX_PATH, s);
     else if (!pv_join(out->save_path, FVPL_MAX_PATH, basedir, s)) {
         if (err) pv_copy(err, errcch, L"[save] path 写的路径太长了，请把游戏文件夹移到更短的位置");
         return 0;
     }
     if (!pv_norm(out->save_path, FVPL_MAX_PATH)) {
-        if (err) pv_copy(err, errcch, L"[save] path 看不懂；可以填 .（=游戏目录）、userdata，\n或 D:\\saves\\xxx 这样的完整路径");
+        if (err) pv_copy(err, errcch, L"[save] path 看不懂；可以填 .（=游戏目录）、.save，\n或 D:\\saves\\xxx 这样的完整路径");
         return 0;
     }
-    if (pv_ci_equal(out->save_path, basedir) && out->save_migrate) {
-        /* 存档目录 == 游戏目录时, 迁移会把 Documents\FAVORITE 灌进游戏根, 风险不可控 */
-        if (err) pv_copy(err, errcch, L"[save] path 填了 .（=游戏目录），同时 migrate 又是 1，\n这两个不能一起用：要么把 path 改成 userdata，要么把 migrate 改成 0");
-        return 0;
-    }
+    /* path=. (存档就在游戏目录) 现在也允许: 迁移改成按需搬本游戏那一份,
+     * 不会再出现"把 Documents 下所有游戏一起灌进来"的问题 */
     pv_strip_sep(out->save_path);
 
     {
@@ -196,14 +221,47 @@ int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
         if (!out->n_folder_ids) { out->folder_ids[0] = 5; out->n_folder_ids = 1; }
     }
 
-    out->codepage         = (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"codepage", 932);
-    out->font_charset     = (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"font_charset", 128);
+    /* 不写 [nls] 也能跑: codepage 跟随本机, charset 按 codepage 推导, 不动界面文字。 */
+    s = cfg_ini_get(ini, SEC_NLS, L"codepage");
+    out->codepage = ci_is_auto(s)
+                  ? g_host_acp
+                  : (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"codepage", (fvpl_int)g_host_acp);
+    s = cfg_ini_get(ini, SEC_NLS, L"font_charset");
+    out->font_charset = ci_is_auto(s)
+                      ? ci_charset_of(out->codepage)
+                      : (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"font_charset", 0);
+    /* 文本层: 留空 = 与 codepage 相同 (不做文本层转换);
+     * 填了 = 游戏台词/标题所用的码页 (日文原版 932)。只影响字体/字形/文本 API。
+     * 兼容旧键 font_fix = 1 (等价于"按 codepage 做字体修正")。 */
+    s = cfg_ini_get(ini, SEC_NLS, L"text_codepage");
+    if (ci_is_auto(s)) {
+        out->text_codepage = cfg_ini_int(ini, SEC_NLS, L"font_fix", 0) ? out->codepage : 0;
+    } else {
+        out->text_codepage = (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"text_codepage", 0);
+    }
+    s = cfg_ini_get(ini, SEC_NLS, L"font_charset");
+    out->font_charset = ci_is_auto(s)
+                      ? ci_charset_of(out->text_codepage ? out->text_codepage : out->codepage)
+                      : (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"font_charset", 0);
     out->virtualize_files = cfg_ini_int(ini, SEC_NLS, L"virtualize_files", 1);
-    out->virtualize_ui    = cfg_ini_int(ini, SEC_NLS, L"virtualize_ui", 1);
+    out->virtualize_ui    = cfg_ini_int(ini, SEC_NLS, L"virtualize_ui", out->text_codepage ? 1 : 0);
     out->lcid             = (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"lcid", 0);
+    {
+        const fvpl_wchar *ff = cfg_ini_get(ini, SEC_NLS, L"font_face");
+        pv_copy(out->font_face, 64, (ff && *ff) ? ff : L"");
+    }
     if (out->codepage == 0 || out->codepage == 1) {
         /* 0=CP_ACP(正是要虚拟掉的), 1=CP_OEMCP —— 都会让 hook 递归或语义反转 */
-        if (err) pv_copy(err, errcch, L"[nls] codepage 不能填 0 或 1，\n请填 932 / 936 / 950 / 949 / 1252 / 65001 其中之一");
+        if (err) pv_copy(err, errcch, L"[nls] codepage 不能填 0 或 1。\n"
+                                      L"想用本机码页就把这一行留空或整行删掉。\n"
+                                      L"也可以填 932 / 936 / 950 / 949 / 1252 / 65001。");
+        return 0;
+    }
+    if (out->text_codepage == 1) {
+        /* 1=CP_OEMCP 语义相反; 0 是合法值(= 不做文本层转换), 不在这里拦 */
+        if (err) pv_copy(err, errcch, L"[nls] text_codepage 不能填 1。\n"
+                                      L"0 或留空或整行删掉 = 不做文本层转换。\n"
+                                      L"日文原版填 932, 简中汉化填 936。");
         return 0;
     }
     return 1;

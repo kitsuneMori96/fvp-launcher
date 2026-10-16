@@ -29,7 +29,7 @@ build_pair() {   # $1=arch(-m32/-m64) $2=编译器 $3=输出目录
     rm -rf "$DIST/$out"
     mkdir -p "$DIST/$out"
     "$cc-gcc" $COMMON_FLAGS -mwindows -static \
-        -o "$DIST/$out/FVPLauncher.exe" src/launcher.c src/config.c src/pathutil.c \
+        -o "$DIST/$out/FVPLauncher.exe" src/launcher.c src/wizard.c src/config.c src/pathutil.c \
         src/peinfo.c src/winutil.c src/utf8w.c -luser32 2>&1 | tee "$LOG"
     test -f "$DIST/$out/FVPLauncher.exe"
     "$cc-gcc" $COMMON_FLAGS -shared -static \

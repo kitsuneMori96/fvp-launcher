@@ -120,9 +120,24 @@ static void t_config(void) {
         cfg_ini_parse(L"[nls]\ncodepage=0\n", &e);
         CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 0, "codepage 0 refused");
         cfg_ini_parse(L"[save]\npath=.\n", &e);
-        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 0, "save==basedir refused while migrate on");
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && pv_ci_equal(c.save_path, L"C:\\g"),
+              "save==basedir allowed (lazy migrate only takes this game's files)");
         cfg_ini_parse(L"[save]\npath=.\nmigrate=0\n", &e);
         CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1, "save==basedir allowed when migrate off");
+    }
+    {
+        /* 没有任何 ini 也要能跑: codepage 跟随宿主, charset 按 codepage 推导, 界面文字不动 */
+        FvplIni e;
+        cfg_set_host_acp(936);
+        cfg_ini_parse(L"", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1, "empty ini builds");
+        CHECK(c.codepage == 936 && c.font_charset == 134, "host acp becomes default codepage");
+        CHECK(c.virtualize_ui == 0, "ui virtualization off by default");
+        cfg_ini_parse(L"[nls]\ncodepage = auto\nfont_charset = auto\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.codepage == 936 && c.font_charset == 134, "auto keyword");
+        cfg_set_host_acp(932);
+        cfg_ini_parse(L"", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.codepage == 932 && c.font_charset == 128, "jp host derives shiftjis charset");
     }
 }
 

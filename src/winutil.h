@@ -15,4 +15,9 @@ int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeou
 /* 进程当前已加载的模块数; 拿不到快照返回 -1。加载器处理完导入表之前只有 exe 与 ntdll。 */
 int FvplProcessModuleCount(DWORD pid);
 
+/* 宿主进程真实的 ANSI 码页 (GetACP 的真值)。
+ * 不能直接调 GetACP(): 本 DLL 自己的导入表已被 Hook_GetACP 换掉, 而在 hook 里
+ * 触发配置初始化会自旋等自己 (会死等); 这里用 GetProcAddress 现取一份原函数。 */
+fvpl_uint FvplHostAcp(void);
+
 #endif /* FVPL_WINUTIL_H */

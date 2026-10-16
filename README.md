@@ -54,7 +54,8 @@ child injection deferred to FVPLauncher.exe
 
 ## 用法
 
-把 `dist/x86/FVPLauncher.exe`、`dist/x86/fvpl_hook.dll` 和一份 `fvp-launcher.ini` 放进游戏目录, 双击启动器。
+把 `dist/x86/FVPLauncher.exe` 和 `dist/x86/fvpl_hook.dll` 放进游戏目录, 双击启动器即可 ——
+`fvp-launcher.ini` 可以没有, 此时按本机环境自动推断 (见下)。要精细适配再放一份 ini。
 汉化版 (带 `SakuraChs.exe` 的) 把 `[launcher] exe` 写成链的最外层并开 `inject_children = 1`。
 
 配置项见 `fvp-launcher.ini.example`。最常用两档:
@@ -70,6 +71,23 @@ migrate = 0
 path = D:\saves\さくら    ; 独立存档盘, 首启时把文档里的老档搬过来
 migrate = 1
 ```
+
+## 不写 ini 时的默认值
+
+启动器不依赖 ini: 目录里没有 `fvp-launcher.ini` 时按下面的自动推断跑, 原则是"至少不比直接
+双击游戏更差"。`codepage` / `font_charset` 也可以显式写 `auto`。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `[launcher] exe` | 自动探测 | 扫本目录, 挑导入 `shell32!SHGetFolderPathA` 的主程序; 多个才弹框让你写死 |
+| `[launcher] inject_children` | `0` | 汉化链式启动 (`SakuraChs.exe` → `Sakura.exe`) 必须写 `1` |
+| `[save] redirect` / `path` | `1` / `userdata` | 存档根落到游戏目录下的 `userdata`, 不是系统"文档" |
+| `[save] migrate` | `1` | 首启把"文档"里的老档**复制**过来 (源不删, 已存在的目标文件跳过) |
+| `[nls] codepage` | **本机真实 ACP** | 中文 Windows = 936。谎报别的值会破坏非 ASCII 路径的 A↔W 往返 (见实测样例) |
+| `[nls] font_charset` | 按 codepage 推导 | 932→128 936→134 950→136 949→129 1252→0 |
+| `[nls] virtualize_files` | `1` | |
+| `[nls] virtualize_ui` | `0` | 默认不动界面文字 —— 汉化文本层要 0, 日文原版要 1, 无法两全, 所以默认不碰 |
+| `[nls] lcid` | `0` | |
 
 ## 构建
 

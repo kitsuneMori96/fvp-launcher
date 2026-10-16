@@ -75,71 +75,129 @@ static void copy_tree(const WCHAR *src, const WCHAR *dst) {
     FindClose(h);
 }
 
-static int has_marker(void) {
-    WCHAR m[FVPL_MAX_PATH];
-    return pv_join(m, FVPL_MAX_PATH, s_base, L".fvpl-migrated") &&
-           GetFileAttributesW(m) != INVALID_FILE_ATTRIBUTES;
+/* ---- 懒迁移: 游戏第一次来读某一份存档时才把它搬过来 ----
+ * 旧做法是启动时把 Documents\<migrate_names> 整个复制进存档根, 于是机器上玩过很多
+ * 游戏时, 会把所有游戏的存档全灌进这个游戏目录。现在改成按需:
+ *   游戏要读 <存档根>\<相对路径>  ->  目标不存在, 而 Documents\<相对路径> 存在时,
+ *   只把那一份 (或它所在的那一层目录) 复制过来。
+ * 结果: 每个游戏只带进自己的存档, 游戏没访问过的东西一个字节都不动。 */
+static int path_exists_w(const WCHAR *p) {
+    return p != NULL && p[0] != 0 && GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES;
 }
 
-static void put_marker(void) {
-    WCHAR m[FVPL_MAX_PATH];
-    HANDLE h;
-    if (!pv_join(m, FVPL_MAX_PATH, s_base, L".fvpl-migrated")) return;
-    h = CreateFileW(m, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+/* root 是 path 的前缀 (忽略大小写, 后面必须紧跟分隔符) 时 *rest = 相对部分 */
+static int path_under_w(const WCHAR *root, const WCHAR *path, const WCHAR **rest) {
+    int i, n = pv_len(root);
+    if (n <= 0 || path == NULL) return 0;
+    for (i = 0; i < n; i++) {
+        WCHAR a = root[i], b = path[i];
+        if (!b) return 0;
+        if (a >= L'a' && a <= L'z') a = (WCHAR)(a - 32);
+        if (b >= L'a' && b <= L'z') b = (WCHAR)(b - 32);
+        if (a != b) return 0;
+    }
+    if (path[n] != L'\\' && path[n] != L'/') return 0;
+    *rest = path + n + 1;
+    return 1;
 }
 
-/* 老档迁移: 真 Documents 下命中 migrate_names 的一级目录整体复制进存档根。
- * 走 W 版 API 取 Documents —— 用户名是中文时 A 版会按真实 ACP 编码, 换页就错。 */
-static void maybe_migrate(void) {
+/* 相对路径的第一段目录名是否在 migrate_names 白名单里 ("*" = 不限) */
+static int migrate_name_ok(const WCHAR *rel) {
+    WCHAR first[260], token[256];
+    int i = 0, k = 0, n = pv_len(g_cfg.migrate_names);
+    if (n <= 0 || rel == NULL) return 0;
+    while (rel[k] && rel[k] != L'\\' && rel[k] != L'/' && k < 259) { first[k] = rel[k]; k++; }
+    first[k] = 0;
+    if (k == 0) return 0;
+    for (;;) {
+        int tk = 0, all;
+        while (i < n && (g_cfg.migrate_names[i] == L';' || g_cfg.migrate_names[i] == L',' ||
+                         g_cfg.migrate_names[i] == L' ')) i++;
+        while (i < n && g_cfg.migrate_names[i] != L';' && g_cfg.migrate_names[i] != L',' &&
+               g_cfg.migrate_names[i] != L' ') {
+            if (tk < 255) token[tk++] = g_cfg.migrate_names[i];
+            i++;
+        }
+        token[tk] = 0;
+        if (tk == 0) return 0;
+        all = (token[0] == L'*' && token[1] == 0);
+        if (all || pv_ci_equal(first, token)) return 1;
+        if (i >= n) return 0;
+    }
+}
+
+/* 同一次运行里同一个相对路径只搬一次: 游戏轮询空存档位时会反复来问同一份 */
+static unsigned rel_hash(const WCHAR *s) {
+    unsigned h = 2166136261u;
+    for (; s != NULL && *s != 0; s++) {
+        unsigned c = (unsigned)(*s);
+        h = (h ^ (c & 0xFFu)) * 16777619u;
+        h = (h ^ (c >> 8)) * 16777619u;
+    }
+    return h;
+}
+
+static int migrate_already(unsigned h) {
+    static unsigned seen[32];
+    static int n = 0;
+    int i;
+    for (i = 0; i < n; i++) {
+        if (seen[i] == h) return 1;
+    }
+    if (n < 32) seen[n++] = h;
+    return 0;
+}
+
+/* 游戏访问 path 时调用: 需要就先只搬这一份过来 */
+void FvplMigratePathW(const WCHAR *path) {
+    static LONG busy = 0;
     WCHAR docs[FVPL_MAX_PATH], src[FVPL_MAX_PATH], dst[FVPL_MAX_PATH];
-    WCHAR token[256];
+    WCHAR rel[FVPL_MAX_PATH], parent[FVPL_MAX_PATH];
+    const WCHAR *rest;
     HRESULT hr;
-    if (!g_cfg.save_migrate) return;
-    if (has_marker()) return;
+    if (!g_cfg.save_migrate || !s_base_ok || s_base[0] == 0) return;
+    if (!path_under_w(s_base, path, &rest) || rest[0] == 0) return;
+    if (!migrate_name_ok(rest)) return;
+    if (path_exists_w(path)) return;                 /* 已经有一份了, 不动 */
+    if (InterlockedExchange(&busy, 1) != 0) return;  /* 复制过程中可能再被调进来 */
     hr = SHGetFolderPathW(NULL, CSIDL_PERSONAL, NULL, 0, docs);
-    if (FAILED(hr) || !docs[0]) return;
-    if (pv_ci_equal(docs, s_base)) { put_marker(); return; }
-    {
-        int i = 0, k = 0, n = pv_len(g_cfg.migrate_names);
-        if (n <= 0) { put_marker(); return; }
-        for (;;) {
-            int all;
-            while (i < n && (g_cfg.migrate_names[i] == L';' || g_cfg.migrate_names[i] == L',' ||
-                             g_cfg.migrate_names[i] == L' ')) i++;
-            k = 0;
-            while (i < n && g_cfg.migrate_names[i] != L';' && g_cfg.migrate_names[i] != L',' &&
-                   g_cfg.migrate_names[i] != L' ') {
-                if (k < 255) token[k++] = g_cfg.migrate_names[i];
-                i++;
+    if (SUCCEEDED(hr) && docs[0] && !pv_ci_equal(docs, s_base)) {
+        if (!pv_copy(rel, FVPL_MAX_PATH, rest)) rel[0] = 0;
+        for (int hop = 0; rel[0] != 0 && hop < 8; hop++) {
+            if (!pv_join(src, FVPL_MAX_PATH, docs, rel)) break;
+            if (path_exists_w(src)) {
+                if (migrate_already(rel_hash(rel))) break;   /* 这次运行已经搬过这一份 */
+                if (pv_join(dst, FVPL_MAX_PATH, s_base, rel) && !path_exists_w(dst)) {
+                    if (GetFileAttributesW(src) & FILE_ATTRIBUTE_DIRECTORY) {
+                        copy_tree(src, dst);
+                    } else {
+                        if (pv_dirname(parent, FVPL_MAX_PATH, dst)) ensure_dirs_w(parent);
+                        CopyFileW(src, dst, TRUE);
+                    }
+                    {
+                        char a[512];
+                        if (WideCharToMultiByte(CP_UTF8, 0, rel, -1, a, (int)sizeof(a),
+                                                NULL, NULL) > 0) {
+                            FvplLog("迁移存档 (只搬本游戏这一份):");
+                            FvplLog(a);
+                        }
+                    }
+                }
+                break;
             }
-            token[k] = 0;
-            if (k == 0) break;
-            all = (token[0] == L'*' && token[1] == 0);
-            if (all) {
-                WIN32_FIND_DATAW fd;
-                HANDLE h;
-                WCHAR pat[FVPL_MAX_PATH];
-                if (!pv_join(pat, FVPL_MAX_PATH, docs, L"*")) break;
-                h = FindFirstFileW(pat, &fd);
-                if (h == INVALID_HANDLE_VALUE) break;
-                do {
-                    if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
-                    if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
-                    if (!pv_join(src, FVPL_MAX_PATH, docs, fd.cFileName)) continue;
-                    if (!pv_join(dst, FVPL_MAX_PATH, s_base, fd.cFileName)) continue;
-                    copy_tree(src, dst);
-                } while (FindNextFileW(h, &fd));
-                FindClose(h);
-            } else {
-                if (!pv_join(src, FVPL_MAX_PATH, docs, token)) break;
-                if (!pv_join(dst, FVPL_MAX_PATH, s_base, token)) break;
-                if (GetFileAttributesW(src) != INVALID_FILE_ATTRIBUTES) copy_tree(src, dst);
+            /* Documents 里没有这一份: 退到它所在的目录再试, 但绝不越过第一段
+             * (第一段就是白名单里的游戏名 -> 再往上就成了"把所有游戏一起搬") */
+            if (!pv_dirname(parent, FVPL_MAX_PATH, rel)) break;
+            if (parent[0] == 0 || pv_ci_equal(parent, rel)) break;
+            {
+                int k;
+                for (k = 0; parent[k] && parent[k] != L'\\' && parent[k] != L'/'; k++) ;
+                if (parent[k] == 0) break;           /* 只剩第一段了, 到此为止 */
             }
-            if (i >= n) break;
+            if (!pv_copy(rel, FVPL_MAX_PATH, parent)) break;
         }
     }
-    put_marker();
+    InterlockedExchange(&busy, 0);
 }
 
 static void do_init(void) {
@@ -151,6 +209,7 @@ static void do_init(void) {
     int n;
 
     pv_copy(err, 256, L"");
+    cfg_set_host_acp(FvplHostAcp());
     n = (int)GetModuleFileNameW(NULL, exepath, FVPL_MAX_PATH);
     if (n <= 0 || n >= FVPL_MAX_PATH) { s_state = 3; return; }
     if (!pv_dirname(basedir, FVPL_MAX_PATH, exepath)) { s_state = 3; return; }
@@ -160,7 +219,7 @@ static void do_init(void) {
     ini.n = 0;
     if (FvplLoadIniText(basedir, text, 8192))
         cfg_ini_parse(text, &ini);
-    /* 没有 ini 也要能跑: 空配置 = 默认值 (重定向到 userdata + 932) */
+    /* 没有 ini 也要能跑: 空配置 = 默认值 (重定向到 userdata + 本机码页) */
     if (!cfg_build(&ini, basedir, &g_cfg, err, 256)) {
         FvplIni empty;
         empty.n = 0;
@@ -181,7 +240,7 @@ static void do_init(void) {
         WideCharToMultiByte(g_cfg.codepage, 0, s_base, -1, s_baseA, FVPL_MAX_PATH, NULL, NULL);
         s_base_ok = 1;
     }
-    maybe_migrate();
+    /* 存档迁移改成懒迁移: 游戏访问哪一份才搬哪一份, 见 FvplMigratePathW() */
     s_state = 2;
 }
 
@@ -208,6 +267,21 @@ int FvplA2W(const char *a, WCHAR *w, int cch) {
 
 int FvplW2A(const WCHAR *w, char *a, int cch) {
     return WideCharToMultiByte(g_cfg.codepage, 0, w, -1, a, cch, NULL, NULL);
+}
+
+/* 文本层码页: 未设 text_codepage 时与系统/路径码页相同 (等价于不做文本层转换)。
+ * 日文原版装在中文系统上时 = 932, 这样标题和台词按游戏自己的编码解释,
+ * 而 GetACP / 文件路径仍然按本机 936, 引擎取路径就不会错。 */
+UINT FvplTextCp(void) {
+    return g_cfg.text_codepage ? g_cfg.text_codepage : g_cfg.codepage;
+}
+
+int FvplTextA2W(const char *a, WCHAR *w, int cch) {
+    return MultiByteToWideChar(FvplTextCp(), 0, a, -1, w, cch);
+}
+
+int FvplTextW2A(const WCHAR *w, char *a, int cch) {
+    return WideCharToMultiByte(FvplTextCp(), 0, w, -1, a, cch, NULL, NULL);
 }
 
 const WCHAR *FvplSaveDirW(void) {

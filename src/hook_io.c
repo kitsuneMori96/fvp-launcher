@@ -130,6 +130,7 @@ static HANDLE WINAPI Hook_CreateFileA(LPCSTR name, DWORD access, DWORD share,
     WCHAR w[FVPL_MAX_PATH];
     if (!io_ready() || name == NULL || !FvplA2W(name, w, FVPL_MAX_PATH))
         return o_CreateFileA(name, access, share, sa, disp, flags, templ);
+    FvplMigratePathW(w);              /* 第一次读这份旧存档时先把这一份搬过来 */
     return CreateFileW(w, access, share, sa, disp, flags, templ);
 }
 
@@ -157,6 +158,7 @@ static BOOL WINAPI Hook_FindFirstFileA(LPCSTR pat, LPWIN32_FIND_DATAA data) {
     HANDLE h;
     if (!io_ready() || pat == NULL || data == NULL || !FvplA2W(pat, w, FVPL_MAX_PATH))
         return o_FindFirstFileA(pat, data);
+    FvplMigratePathW(w);              /* 枚举存档目录也算"要用这份旧档" */
     h = FindFirstFileW(w, &d);
     if (h == INVALID_HANDLE_VALUE) { SetLastError(GetLastError()); return FALSE; }
     find_track_add(h);
@@ -180,6 +182,7 @@ static DWORD WINAPI Hook_GetFileAttributesA(LPCSTR name) {
     WCHAR w[FVPL_MAX_PATH];
     if (!io_ready() || name == NULL || !FvplA2W(name, w, FVPL_MAX_PATH))
         return o_GetFileAttributesA(name);
+    FvplMigratePathW(w);
     return GetFileAttributesW(w);
 }
 
@@ -187,6 +190,7 @@ static BOOL WINAPI Hook_GetFileAttributesExA(LPCSTR name, GET_FILEEX_INFO_LEVELS
     WCHAR w[FVPL_MAX_PATH];
     if (!io_ready() || name == NULL || !FvplA2W(name, w, FVPL_MAX_PATH))
         return o_GetFileAttributesExA(name, lvl, info);
+    FvplMigratePathW(w);
     return GetFileAttributesExW(w, lvl, info);
 }
 

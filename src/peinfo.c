@@ -126,3 +126,71 @@ int pe_has_import(const unsigned char *blob, unsigned int size,
         }
     }
 }
+
+/* ---- PE 资源目录: 取语言 id -----------------------------------------------
+ * 资源目录三层结构: 类型 -> 名称/ID -> 语言。第三层每个项的 Name 就是 LANGID。
+ * RT_VERSION(type id 16) 子树优先(它的语言基本代表本机化语言); 没有就取第一个
+ * 类型下第一个语言项。所有偏移都相对资源目录根, 且每次读取都过 ok() 边界检查。 */
+static int res_dir(const unsigned char *b, unsigned int size, unsigned int doff,
+                   unsigned int *n, unsigned int *ebase) {
+    unsigned int named, ided;
+    if (!ok(doff, 16, size)) return 0;
+    named = rd16(b + doff + 12);
+    ided  = rd16(b + doff + 14);
+    *n = named + ided;
+    *ebase = doff + 16;
+    return ok(*ebase, (unsigned long long)*n * 8, size);
+}
+
+/* 在"名称/ID"目录(l2dir)里, 取第一个语言目录(第三层)下的第一个 LANGID */
+static int res_first_lang(const unsigned char *b, unsigned int size, unsigned int root,
+                          unsigned int l2dir, unsigned int *out) {
+    unsigned int n, ebase, i;
+    if (!res_dir(b, size, l2dir, &n, &ebase)) return 0;
+    for (i = 0; i < n; i++) {
+        unsigned int e = ebase + i * 8;
+        unsigned int data = rd32(b + e + 4);
+        unsigned int l3, n3, eb3, j;
+        if (!(data & 0x80000000u)) continue;          /* 指向数据项而非子目录 */
+        l3 = root + (data & 0x7FFFFFFFu);
+        if (!ok(l3, 16, size)) continue;
+        if (!res_dir(b, size, l3, &n3, &eb3)) continue;
+        for (j = 0; j < n3; j++) {
+            unsigned int e3 = eb3 + j * 8;
+            unsigned int name = rd32(b + e3);
+            if (name & 0x80000000u) continue;         /* 命名语言项: 跳过 */
+            *out = name;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int pe_resource_lang(const unsigned char *b, unsigned int size) {
+    unsigned int res_rva, res_len, root, n, ebase, i, lang;
+    if (!b || size < 0x40 || rd16(b) != 0x5A4D) return 0;              /* MZ */
+    if (!data_dir(b, size, 2, &res_rva, &res_len) || !res_rva || !res_len) return 0;
+    if (!rva_to_off(b, size, res_rva, &root)) return 0;
+    if (!res_dir(b, size, root, &n, &ebase)) return 0;
+
+    /* 1) 优先 RT_VERSION (16) */
+    for (i = 0; i < n; i++) {
+        unsigned int e = ebase + i * 8;
+        unsigned int name = rd32(b + e);
+        unsigned int data = rd32(b + e + 4);
+        if ((name & 0x80000000u) || name != 16u) continue;
+        if (!(data & 0x80000000u)) break;
+        if (res_first_lang(b, size, root, root + (data & 0x7FFFFFFFu), &lang))
+            return (int)lang;
+        break;
+    }
+    /* 2) 没有就取任意类型下第一个语言 id */
+    for (i = 0; i < n; i++) {
+        unsigned int e = ebase + i * 8;
+        unsigned int data = rd32(b + e + 4);
+        if (!(data & 0x80000000u)) continue;
+        if (res_first_lang(b, size, root, root + (data & 0x7FFFFFFFu), &lang))
+            return (int)lang;
+    }
+    return 0;
+}

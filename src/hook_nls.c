@@ -32,9 +32,13 @@ typedef HFONT (WINAPI *PFN_CreateFontA)(int, int, int, int, int, DWORD, DWORD, D
 typedef DWORD (WINAPI *PFN_GetGlyphOutlineA)(HDC, UINT, UINT, LPGLYPHMETRICS, DWORD, LPVOID,
                                              const MAT2 *);
 typedef int (WINAPI *PFN_lstrcmpiA)(LPCSTR, LPCSTR);
+typedef uint32_t (WINAPI *PFN_GetOEMCP)(void);
+typedef BOOL (WINAPI *PFN_IsValidCodePage)(UINT);
 
 static PFN_GetACP            o_GetACP;
 static PFN_GetCPInfo         o_GetCPInfo;
+static PFN_GetOEMCP          o_GetOEMCP;
+static PFN_IsValidCodePage   o_IsValidCodePage;
 static PFN_IsDBCSLeadByteEx  o_IsDBCSLeadByteEx;
 static PFN_IsDBCSLeadByte    o_IsDBCSLeadByte;
 static PFN_MB2W              o_MultiByteToWideChar;
@@ -68,6 +72,19 @@ static uint32_t WINAPI Hook_GetACP(void) {
 static BOOL WINAPI Hook_GetCPInfo(UINT cp, LPCPINFO info) {
     if (!nls_on()) return o_GetCPInfo ? o_GetCPInfo(cp, info) : FALSE;
     return o_GetCPInfo(FvplMapCP(cp), info);
+}
+
+/* Sakura.exe 确实导入这两个, 漏掉会让引擎在"我是不是日文机"这一步穿帮 */
+static uint32_t WINAPI Hook_GetOEMCP(void) {
+    if (!nls_on()) return o_GetOEMCP ? o_GetOEMCP() : 0;
+    return (uint32_t)g_cfg.codepage;
+}
+
+static BOOL WINAPI Hook_IsValidCodePage(UINT cp) {
+    if (!nls_on() || o_IsValidCodePage == NULL)
+        return o_IsValidCodePage ? o_IsValidCodePage(cp) : FALSE;
+    if (cp == (UINT)g_cfg.codepage) return TRUE;
+    return o_IsValidCodePage(cp);
 }
 
 static BOOL WINAPI Hook_IsDBCSLeadByteEx(UINT cp, BYTE b) {
@@ -207,6 +224,8 @@ static int ui_text(WCHAR *dst, int cch, LPCSTR src) {
 static const FvplPatch s_tbl[] = {
     { "kernel32.dll", "GetACP",               (void *)Hook_GetACP,              (void **)&o_GetACP },
     { "kernel32.dll", "GetCPInfo",            (void *)Hook_GetCPInfo,           (void **)&o_GetCPInfo },
+    { "kernel32.dll", "GetOEMCP",             (void *)Hook_GetOEMCP,            (void **)&o_GetOEMCP },
+    { "kernel32.dll", "IsValidCodePage",      (void *)Hook_IsValidCodePage,     (void **)&o_IsValidCodePage },
     { "kernel32.dll", "IsDBCSLeadByte",       (void *)Hook_IsDBCSLeadByte,      (void **)&o_IsDBCSLeadByte },
     { "kernel32.dll", "IsDBCSLeadByteEx",     (void *)Hook_IsDBCSLeadByteEx,    (void **)&o_IsDBCSLeadByteEx },
     { "kernel32.dll", "MultiByteToWideChar",  (void *)Hook_MultiByteToWideChar, (void **)&o_MultiByteToWideChar },

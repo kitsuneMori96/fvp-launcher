@@ -35,7 +35,7 @@ static int child_has_dll(DWORD pid, const WCHAR *dllpath) {
     while (i > 0 && dllpath[i - 1] != L'\\' && dllpath[i - 1] != L'/') i--;
     if (n - i <= 0 || n - i >= 64) return 0;
     lstrcpynW(name, dllpath + i, n - i + 1);
-    snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
     if (snap == INVALID_HANDLE_VALUE) return 0;
     me.dwSize = sizeof(me);
     if (Module32FirstW(snap, &me)) {
@@ -45,6 +45,22 @@ static int child_has_dll(DWORD pid, const WCHAR *dllpath) {
     }
     CloseHandle(snap);
     return found;
+}
+
+/* 进程当前已加载的模块数。加载器处理导入表之前只有 exe 与 ntdll 两项, 之后会跳到几十个 ——
+   这就是"子进程已经跑起来"的可观测信号, 延迟注入用它决定什么时候动手。 */
+int FvplProcessModuleCount(DWORD pid) {
+    MODULEENTRY32W me;
+    HANDLE snap;
+    int n = 0;
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snap == INVALID_HANDLE_VALUE) return -1;
+    me.dwSize = sizeof(me);
+    if (Module32FirstW(snap, &me)) {
+        do { n++; } while (Module32NextW(snap, &me));
+    }
+    CloseHandle(snap);
+    return n;
 }
 
 int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeout_ms,

@@ -161,6 +161,54 @@ static void base_name(const WCHAR *path, WCHAR *name, int cch) {
     pv_copy(name, cch, path + i);
 }
 
+static DWORD parse_pid(const WCHAR *s) {
+    DWORD v = 0;
+    int i;
+    for (i = 0; s[i] >= L'0' && s[i] <= L'9'; i++) v = v * 10 + (DWORD)(s[i] - L'0');
+    return v;
+}
+
+/* 延迟注入模式: FVPLauncher.exe --inject-ready <pid> [dll路径]
+   hook 侧只在"调用方自己挂起子进程"时用它 —— 那种场合宿主(SakuraChs.exe)注入完就退出,
+   不能在它里面等; 由这个独立进程等到子进程加载器初始化完(模块数超过 exe+ntdll)再注入。 */
+static int inject_ready_mode(DWORD pid, const WCHAR *dllpath) {
+    WCHAR dll[FVPL_MAX_PATH];
+    const WCHAR *fail_step = NULL;
+    HANDLE proc;
+    int i, n;
+
+    if (dllpath && dllpath[0]) {
+        lstrcpynW(dll, dllpath, FVPL_MAX_PATH);
+    } else {
+        WCHAR own[FVPL_MAX_PATH], base[FVPL_MAX_PATH];
+        if (GetModuleFileNameW(NULL, own, FVPL_MAX_PATH) == 0) return 1;
+        if (!pv_dirname(base, FVPL_MAX_PATH, own)) return 1;
+        if (!pv_join(dll, FVPL_MAX_PATH, base, DLL_NAME)) return 1;
+    }
+
+    proc = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+                       PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid);
+    if (proc == NULL) {
+        alog(L"延迟注入: 打不开 pid=%u (GetLastError=%u)", (unsigned)pid, (unsigned)GetLastError());
+        return 1;
+    }
+    for (i = 0; i < 3000; i++) {
+        if (WaitForSingleObject(proc, 0) == WAIT_OBJECT_0) {
+            alog(L"延迟注入: pid=%u 已退出, 放弃", (unsigned)pid);
+            CloseHandle(proc);
+            return 1;
+        }
+        n = FvplProcessModuleCount(pid);
+        if (n > 2) break;   /* 加载器已把导入表处理完, 汉化组塞的项都进来了 */
+        Sleep(10);          /* 快照在对方加载器初始化途中可能拿不到, 继续等 */
+    }
+    alog(L"延迟注入: pid=%u 模块数=%d, 注入 %s", (unsigned)pid, FvplProcessModuleCount(pid), dll);
+    if (FvplInjectDll(proc, pid, dll, 20000, NULL, &fail_step)) alog(L"延迟注入完成");
+    else alog(L"延迟注入失败: %s", fail_step ? fail_step : L"未知");
+    CloseHandle(proc);
+    return 0;
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     WCHAR own[FVPL_MAX_PATH], basedir[FVPL_MAX_PATH], self_name[FVPL_MAX_PATH];
     WCHAR dll[FVPL_MAX_PATH], target[FVPL_MAX_PATH];
@@ -188,6 +236,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     base_name(own, self_name, FVPL_MAX_PATH);
     if (pv_join(s_logpath, FVPL_MAX_PATH, basedir, L"fvpl_launcher.log"))
         alog(L"===== 启动 =====");
+
+    /* 延迟注入模式: 只为 hook 侧服务, 不读 ini、不弹窗、不找游戏 */
+    {
+        int argc = 0;
+        WCHAR **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        if (argv != NULL) {
+            if (argc >= 3 && lstrcmpW(argv[1], L"--inject-ready") == 0) {
+                int rc = inject_ready_mode(parse_pid(argv[2]), argc >= 4 ? argv[3] : NULL);
+                LocalFree(argv);
+                return rc;
+            }
+            LocalFree(argv);
+        }
+    }
 
     for (i = 0; i < FVPL_INI_MAXENTRY; i++) { ini.ent[i].sec[0] = 0; ini.ent[i].key[0] = 0; }
     ini.n = 0;

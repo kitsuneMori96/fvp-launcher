@@ -19,6 +19,32 @@ x86 / x64 各一套 (`dist/x86`, `dist/x64`), 位数必须和游戏 exe 一致, 
 游戏 exe 一个字节都不改, 与汉化组 `filter.dll` 自带的 Detours 补丁不冲突, 删掉注入的 DLL 即完全回滚。
 FVP 引擎的所有外部调用都走导入表, IAT 足够。
 
+## 汉化版的链式启动 → 延迟注入
+
+汉化版的最外层 `SakuraChs.exe` 自己也是个启动器: 它 `CREATE_SUSPENDED` 起 `Sakura.exe`, **在挂起状态
+下**往子进程导入表里塞 `filter.dll` (连同 `ass.dll` / `MSVCP140` / `VCRUNTIME140`), 然后才放行。
+
+我们的 `CreateProcessA` hook 会把这个子进程接过去, 但**不能当场注入**: 远线程注入会立刻触发子进程的
+加载器初始化, 而加载器只处理初始化那一刻已存在的导入项 —— 汉化组随后才塞进去的那条永远轮不到被处理。
+实测后果就是 `filter.dll` 整条链进不了游戏, 汉化失效、对话回落成原版日文 (标题也变回日文)。
+
+所以 hook 侧一发现"调用方自己带着 `CREATE_SUSPENDED`", 就不自己动手, 而是拉起同目录的
+`FVPLauncher.exe --inject-ready <pid> <dll>` —— 独立进程, 不会随宿主 (`SakuraChs.exe` 注入完就退出)
+一起消失 —— 由它等到子进程模块数超过 `exe + ntdll` (即加载器已处理完导入表) 再注入。
+
+`fvpl_hook.log` / `fvpl_launcher.log` 里能看到这条链:
+
+```
+CreateProcessA intercepted
+  caller passed CREATE_SUSPENDED
+child injection deferred to FVPLauncher.exe
+延迟注入: pid=24412 模块数=22, 注入 D:\soft\Sakura moyu\fvpl_hook.dll
+延迟注入完成
+```
+
+结果: 汉化的 `filter.dll` / `ass.dll` / `MSVCP140` 与我们的 `fvpl_hook.dll` 同时存在于游戏进程里
+(实测模块表 75 项, 两者齐全), 标题栏与画面都是汉化后的中文。
+
 ## 存档路径是怎么来的 (逆向结论)
 
 `Sakura.exe` (PE32, 0x014c) 的存档根 = `shell32!SHGetFolderPathA(CSIDL_PERSONAL)` 拼上
@@ -55,6 +81,35 @@ migrate = 1
 依赖 `gcc`、`mingw-w64` (`i686-w64-mingw32-gcc` / `x86_64-w64-mingw32-gcc`)。
 纯逻辑模块 (`pathutil` `utf8w` `config` `peinfo`) 不依赖 `windows.h`, 直接在 WSL 上用 host gcc 单测,
 测试里会拿真实 `Sakura.exe` 校验 PE 解析和导入指纹。
+
+## 按游戏单独适配 (每游戏一份 ini)
+
+`fvp-launcher.ini` 就是适配点: 同一个 `FVPLauncher.exe` 扔进不同游戏目录, 各自读自己那份,
+可以随汉化包一起分发, 不需要改代码、也不需要装 Locale Emulator。
+
+实测样例 —— **さくら、もゆ。 简体汉化版** (`SakuraChs.exe` 链式启动 `Sakura.exe`, 汉化自带
+`filter.dll` + `ass.dll`/libass 文本层):
+
+```ini
+[launcher]
+exe = SakuraChs.exe
+inject_children = 1
+
+[nls]
+codepage = 936
+font_charset = 134
+virtualize_files = 1
+virtualize_ui = 0        ; 关键: 汉化自带文本层时必须关
+```
+
+- **`virtualize_ui = 0` 是关键**。这类汉化自己就 hook 了取字形 / 窗口标题的路径 (它自带
+  libass 文本层), 再叠我们的 `CreateFontA` / `GetGlyphOutlineA` / `MessageBoxA` /
+  `CreateWindowExA` 标题 hook 会让对话文本与标题栏一起错乱 (实测: 标题回落成"原版日文
+  字节被当 GBK 读"的乱码形态)。纯日文原版游戏没有自带文本层, 才需要开 1。
+- `virtualize_files = 1` 可以和这类汉化共存 (实测): 文件 API 的码页解释层不干扰链式启动。
+- 宿主进程自己就是 936 时, `codepage = 936` 那批转换 hook 等价于空操作 —— 此时启动器提供的
+  是"子进程注入 + 存档重定向"; 到了日文区 Windows 上, 同一个 ini 才真正靠这批 hook 把 ACP
+  假扮成 936, 顶掉外挂 Locale Emulator 的作用。
 
 ## 已知边界
 

@@ -63,9 +63,19 @@ int FvplIatApply(HMODULE module, const FvplPatch *table, int count) {
                     if ((ULONG_PTR)p->hook == thunk[i].u1.Function) continue;   /* 本模块已打过 */
                     if (pass == 0) {
                         IMAGE_IMPORT_BY_NAME *ibn;
+                        HMODULE h;
+                        void *real;
                         if (p->dll && !ci_ends(dllname, p->dll)) continue;
                         ibn = (IMAGE_IMPORT_BY_NAME *)(base + names[i].u1.AddressOfData);
                         if (_stricmp((const char *)ibn->Name, p->func) != 0) continue;
+                        /* 槽位当前值必须仍是系统原函数: 汉化组(如 filter.dll)常在自己进程里
+                           预先换掉 CreateProcessA 之类的槽位来接管子进程, 抢过来就会把它的
+                           注入链整条掐断(SakuraChs.exe -> Sakura.exe 的 filter.dll/ass.dll
+                           就进不了子进程, 游戏回落原版日文)。别人装好的 hook 一律让给人家。 */
+                        h = GetModuleHandleA(dllname);
+                        if (!h) continue;
+                        real = (void *)GetProcAddress(h, p->func);
+                        if (!real || (ULONG_PTR)real != thunk[i].u1.Function) continue;
                     } else {
                         HMODULE h;
                         void *real;

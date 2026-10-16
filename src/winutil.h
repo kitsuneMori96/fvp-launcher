@@ -12,4 +12,7 @@ int FvplLoadIniText(const WCHAR *dir, fvpl_wchar *out, int outcch);
 int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeout_ms,
                   ULONG_PTR *module_base, const WCHAR **fail_step);
 
+/* 进程当前已加载的模块数; 拿不到快照返回 -1。加载器处理完导入表之前只有 exe 与 ntdll。 */
+int FvplProcessModuleCount(DWORD pid);
+
 #endif /* FVPL_WINUTIL_H */

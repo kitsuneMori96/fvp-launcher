@@ -30,11 +30,53 @@ static int want_inject(WCHAR *dll, int cch) {
     return self_dll(dll, cch);
 }
 
+/* 延迟注入交给独立进程做: 宿主(SakuraChs.exe 那类汉化启动器)注入完就自己退出,
+   在它里面起线程会跟着一起死。这里拉起同目录 FVPLauncher.exe 的 --inject-ready 模式,
+   由它等到子进程加载器初始化完再注入。 */
+static int spawn_ready_helper(DWORD pid, const WCHAR *dll) {
+    WCHAR self[FVPL_MAX_PATH], dir[FVPL_MAX_PATH], helper[FVPL_MAX_PATH];
+    WCHAR cmd[2 * FVPL_MAX_PATH + 64];
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    int i;
+
+    if (!self_dll(self, FVPL_MAX_PATH)) return 0;
+    lstrcpynW(dir, self, FVPL_MAX_PATH);
+    for (i = lstrlenW(dir) - 1; i >= 0; i--) {
+        if (dir[i] == L'\\' || dir[i] == L'/') break;
+    }
+    if (i < 0) return 0;
+    dir[i + 1] = 0;
+    if (!pv_join(helper, FVPL_MAX_PATH, dir, L"FVPLauncher.exe")) return 0;
+    wsprintfW(cmd, L"\"%s\" --inject-ready %u \"%s\"", helper, (unsigned)pid, dll);
+    RtlZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    RtlZeroMemory(&pi, sizeof(pi));
+    /* 宿主可能在 job 对象里: 破不出来就退回普通创建 */
+    if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE,
+                        CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB, NULL, dir, &si, &pi))
+        if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, dir, &si, &pi))
+            return 0;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 1;
+}
+
 static void after_create(HANDLE proc, DWORD pid, HANDLE tid, int suspended_by_us,
                          const WCHAR *dll) {
-    if (FvplInjectDll(proc, pid, dll, 15000, NULL, NULL)) FvplLog("child injected");
-    else FvplLog("child injection skipped");
-    if (suspended_by_us && tid) ResumeThread(tid);
+    if (suspended_by_us) {
+        /* 调用方没打算自己挂起 -> 子进程本来就会跑, 立即注入并放行 */
+        if (FvplInjectDll(proc, pid, dll, 15000, NULL, NULL)) FvplLog("child injected");
+        else FvplLog("child injection skipped");
+        if (tid) ResumeThread(tid);
+        return;
+    }
+    /* 调用方自己带着 CREATE_SUSPENDED 来的(汉化组: 挂起 -> 往子进程导入表里塞自己的
+       DLL -> 再放行)。此刻注入会当场触发子进程的加载器初始化, 之后才塞进导入表的项
+       永远轮不到被处理 —— 实测 filter.dll 及其依赖 ass.dll/MSVCP140 整条进不了游戏,
+       汉化失效、游戏回落原版日文。改由独立进程等它跑起来(加载器初始化完)再注入。 */
+    if (spawn_ready_helper(pid, dll)) FvplLog("child injection deferred to FVPLauncher.exe");
+    else FvplLog("child injection deferred-failed");
 }
 
 static BOOL WINAPI Hook_CreateProcessW(LPCWSTR app, LPWSTR cmd, LPSECURITY_ATTRIBUTES pa,
@@ -65,6 +107,8 @@ static BOOL WINAPI Hook_CreateProcessA(LPCSTR app, LPSTR cmd, LPSECURITY_ATTRIBU
     WCHAR dll[FVPL_MAX_PATH];
     if (o_CreateProcessA == NULL) return FALSE;
     FvplLog("CreateProcessA intercepted");
+    FvplLog((flags & CREATE_SUSPENDED) ? "  caller passed CREATE_SUSPENDED"
+                                       : "  caller passed no CREATE_SUSPENDED");
     if (pi == NULL || si == NULL || !want_inject(dll, FVPL_MAX_PATH))
         return o_CreateProcessA(app, cmd, pa, ta, inherit, flags, env, dir, si, pi);
     {

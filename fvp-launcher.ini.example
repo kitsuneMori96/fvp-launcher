@@ -19,4 +19,7 @@ codepage = 932           ; 虚拟 ACP: 932=日文 936=简体 950=繁体 1252=拉
 font_charset = 128       ; GDI 字符集: 128=SHIFTJIS 134=GB2312 136=Big5 0=Default
 virtualize_files = 1     ; 把 CreateFileA 等文件 API 换成按 codepage 解释的 W 版
 virtualize_ui = 1        ; 虚拟化 LoadStringA / MessageBoxA / CreateFontA / GetGlyphOutlineA
+; ↑ 汉化补丁自带文本层时 (如 さくら、もゆ。 的 filter.dll + libass) 建议设 0:
+;   实测开着会让对话文本与标题栏错乱 —— 那类汉化自己 hook 了取字形/标题的路径, 不要再叠一层。
+;   纯日文原版游戏 (没有汉化自带文本层) 才需要开 1, 把日文码页的字串在中文/英文系统上正确显示。
 lcid = 0                 ; 非 0 (如 0x411) 时让 lstrcmpiA 按该 locale 比较

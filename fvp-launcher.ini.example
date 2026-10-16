@@ -1,0 +1,22 @@
+; fvp-launcher.ini — 放在 FVPLauncher.exe 的同目录 (一般就是游戏目录)
+; 所有键都可以省略, 省略即用下面的默认值。行首 ; 或 # 是注释。
+
+[launcher]
+exe =                    ; 留空 = 扫描本目录, 挑出导入 shell32!SHGetFolderPathA 的 FVP 主程序
+params =                 ; 附加命令行参数, 原样拼在 exe 路径后面
+workdir =                ; 留空 = 启动器所在目录
+inject_children = 1      ; 汉化版是 SakuraChs.exe -> Sakura.exe 链式启动, 需要 1
+
+[save]
+redirect = 1             ; 1 = 把"文档"目录的存档根改写到 path
+path = .                 ; "." = 游戏目录本身; 也可写 userdata 或绝对路径 D:\saves\sakura
+migrate = 0              ; 首次运行把真"文档"里的老档复制过来 (目标已存在的文件跳过, 源不删)
+migrate_names = FAVORITE ; 迁移哪些一级目录, ; 分隔; "*" = 文档下全部
+folder_ids = 5           ; 被改写的 CSIDL 列表 (5=Documents), 逗号分隔
+
+[nls]
+codepage = 932           ; 虚拟 ACP: 932=日文 936=简体 950=繁体 1252=拉丁
+font_charset = 128       ; GDI 字符集: 128=SHIFTJIS 134=GB2312 136=Big5 0=Default
+virtualize_files = 1     ; 把 CreateFileA 等文件 API 换成按 codepage 解释的 W 版
+virtualize_ui = 1        ; 虚拟化 LoadStringA / MessageBoxA / CreateFontA / GetGlyphOutlineA
+lcid = 0                 ; 非 0 (如 0x411) 时让 lstrcmpiA 按该 locale 比较

@@ -1,0 +1,269 @@
+/* launcher.c — FVP 通用启动器: 定位游戏 exe -> 挂起创建进程 -> 注入 fvpl_hook.dll -> 放行
+ *
+ * 启动器本体不做任何 hook, 也不改游戏文件。注入要求同位数, 所以 x86 / x64 各出一套,
+ * 由这里的 PE 位数校验保证不会拿 32 位 DLL 去注 64 位游戏。 */
+#include <windows.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include "config.h"
+#include "pathutil.h"
+#include "peinfo.h"
+#include "winutil.h"
+
+#if defined(__x86_64__) || defined(_M_X64)
+#define OWN_MACHINE FVPL_MACHINE_AMD64
+#define OWN_BITS    64
+#else
+#define OWN_MACHINE FVPL_MACHINE_I386
+#define OWN_BITS    32
+#endif
+
+#define DLL_NAME L"fvpl_hook.dll"
+#define MAX_BLOB (64u * 1024u * 1024u)
+
+static WCHAR s_logpath[FVPL_MAX_PATH];
+
+/* 弹窗看不到就等于没发生: 同一句话也落到 exe 旁边的 fvpl_launcher.log (UTF-8), 方便远程排障 */
+static void alog(const WCHAR *fmt, ...) {
+    WCHAR buf[1600];
+    char utf8[4096];
+    FILE *f;
+    SYSTEMTIME st;
+    va_list ap;
+    int n;
+
+    if (!s_logpath[0]) return;
+    va_start(ap, fmt);
+    _vsnwprintf(buf, 1600, fmt, ap);
+    va_end(ap);
+    buf[1599] = 0;
+    /* 不用 vfwprintf: 它按 MSVC 语义把 %s 当窄字符串, 宽字符路径会被截断 */
+    n = WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, (int)sizeof(utf8), NULL, NULL);
+    if (n <= 0) return;
+    f = _wfopen(s_logpath, L"ab");
+    if (!f) return;
+    GetLocalTime(&st);
+    fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d %s\n", st.wYear, st.wMonth, st.wDay,
+            st.wHour, st.wMinute, st.wSecond, utf8);
+    fclose(f);
+}
+
+static void box(UINT icon, const WCHAR *fmt, ...) {
+    WCHAR buf[1600];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnwprintf(buf, 1600, fmt, ap);
+    va_end(ap);
+    buf[1599] = 0;
+    alog(L"[错误] %s", buf);
+    MessageBoxW(NULL, buf, L"FVP 启动器", MB_OK | icon);
+}
+
+static int read_blob(const WCHAR *path, unsigned char **out, unsigned int *size) {
+    HANDLE h;
+    LARGE_INTEGER sz;
+    DWORD got;
+    unsigned char *buf;
+
+    *out = NULL;
+    *size = 0;
+    h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0x100 || (unsigned long long)sz.QuadPart > MAX_BLOB) {
+        CloseHandle(h);
+        return 0;
+    }
+    buf = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)sz.QuadPart);
+    if (!buf) { CloseHandle(h); return 0; }
+    got = 0;
+    if (!ReadFile(h, buf, (DWORD)sz.QuadPart, &got, NULL) || got != (DWORD)sz.QuadPart) {
+        HeapFree(GetProcessHeap(), 0, buf);
+        CloseHandle(h);
+        return 0;
+    }
+    CloseHandle(h);
+    *out = buf;
+    *size = got;
+    return 1;
+}
+
+/* FVP 引擎的存档根一定出自 SHGetFolderPathA(shell32.dll), 用它当指纹认出游戏主程序 */
+static int is_fvp_exe(const WCHAR *path) {
+    unsigned char *blob;
+    unsigned int size;
+    int hit, m;
+    if (!read_blob(path, &blob, &size)) return 0;
+    m = pe_machine(blob, size);
+    hit = (m == (int)OWN_MACHINE) && pe_has_import(blob, size, "shell32.dll", "SHGetFolderPathA");
+    HeapFree(GetProcessHeap(), 0, blob);
+    return hit;
+}
+
+static void append(WCHAR *dst, int cap, int *len, const WCHAR *s) {
+    while (*s && *len < cap - 1) dst[(*len)++] = *s++;
+    dst[*len] = 0;
+}
+
+/* 目录里扫一遍, 命中 0 个失败、多个则提示并用第一个 */
+static int auto_detect(const WCHAR *basedir, const WCHAR *self_name, WCHAR *out, int outcch) {
+    WCHAR pat[FVPL_MAX_PATH], full[FVPL_MAX_PATH], chosen[FVPL_MAX_PATH], list[1600];
+    WIN32_FIND_DATAW fd;
+    HANDLE h;
+    int n_cand = 0;
+
+    chosen[0] = 0;
+    if (!pv_join(pat, FVPL_MAX_PATH, basedir, L"*.exe")) return 0;
+    h = FindFirstFileW(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (self_name && _wcsicmp(fd.cFileName, self_name) == 0) continue;
+        if (!pv_join(full, FVPL_MAX_PATH, basedir, fd.cFileName)) continue;
+        if (!is_fvp_exe(full)) continue;
+        if (!n_cand) pv_copy(chosen, FVPL_MAX_PATH, full);
+        n_cand++;
+    } while (FindNextFileW(h, &fd) && n_cand < 16);
+    FindClose(h);
+
+    if (n_cand == 0) return 0;
+    if (n_cand > 1) {
+        int len = 0;
+        WCHAR pat2[FVPL_MAX_PATH];
+        WIN32_FIND_DATAW f2;
+        HANDLE h2;
+        append(list, 1600, &len, L"目录里有多个 FVP 主程序, 已选中第一个:\n");
+        if (!pv_join(pat2, FVPL_MAX_PATH, basedir, L"*.exe")) return 0;
+        h2 = FindFirstFileW(pat2, &f2);
+        if (h2 != INVALID_HANDLE_VALUE) {
+            int shown = 0;
+            do {
+                WCHAR j[FVPL_MAX_PATH];
+                if (f2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                if (self_name && _wcsicmp(f2.cFileName, self_name) == 0) continue;
+                if (!pv_join(j, FVPL_MAX_PATH, basedir, f2.cFileName)) continue;
+                if (!is_fvp_exe(j)) continue;
+                if (++shown > 8 || len > 1400) break;
+                append(list, 1600, &len, f2.cFileName);
+                append(list, 1600, &len, L"\n");
+            } while (FindNextFileW(h2, &f2));
+            FindClose(h2);
+        }
+        append(list, 1600, &len, L"\n建议在 [launcher] exe= 写死正确的主程序。");
+        box(MB_ICONWARNING, L"%s", list);
+    }
+    return pv_copy(out, outcch, chosen);
+}
+
+static void base_name(const WCHAR *path, WCHAR *name, int cch) {
+    int i = pv_len(path);
+    while (i > 0 && path[i - 1] != L'\\' && path[i - 1] != L'/') i--;
+    pv_copy(name, cch, path + i);
+}
+
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
+    WCHAR own[FVPL_MAX_PATH], basedir[FVPL_MAX_PATH], self_name[FVPL_MAX_PATH];
+    WCHAR dll[FVPL_MAX_PATH], target[FVPL_MAX_PATH];
+    static WCHAR cmdline[FVPL_MAX_PATH * 4];
+    static fvpl_wchar text[8192];
+    static FvplConfig cfg;
+    FvplIni ini;
+    fvpl_wchar err[256];
+    const WCHAR *fail_step = NULL;
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    unsigned char *blob;
+    unsigned int size;
+    DWORD machine;
+    int i, n, cap;
+
+    (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
+
+    n = (int)GetModuleFileNameW(NULL, own, FVPL_MAX_PATH);
+    if (n <= 0 || n >= FVPL_MAX_PATH) {
+        box(MB_ICONERROR, L"无法取得启动器自身路径 (GetLastError=%u)", (unsigned)GetLastError());
+        return 1;
+    }
+    if (!pv_dirname(basedir, FVPL_MAX_PATH, own)) { box(MB_ICONERROR, L"启动器路径过长"); return 1; }
+    base_name(own, self_name, FVPL_MAX_PATH);
+    if (pv_join(s_logpath, FVPL_MAX_PATH, basedir, L"fvpl_launcher.log"))
+        alog(L"===== 启动 =====");
+
+    for (i = 0; i < FVPL_INI_MAXENTRY; i++) { ini.ent[i].sec[0] = 0; ini.ent[i].key[0] = 0; }
+    ini.n = 0;
+    if (FvplLoadIniText(basedir, text, 8192)) cfg_ini_parse(text, &ini);
+    err[0] = 0;
+    if (!cfg_build(&ini, basedir, &cfg, err, 256)) {
+        FvplIni empty;
+        int bad = (err[0] != 0);
+        empty.n = 0;
+        if (!cfg_build(&empty, basedir, &cfg, err, 256)) { box(MB_ICONERROR, L"配置初始化失败"); return 1; }
+        if (bad) box(MB_ICONWARNING, L"fvp-launcher.ini 配置有误:\n%s\n已按默认值继续。", err);
+    }
+
+    if (cfg.target[0]) {
+        if (pv_is_abs(cfg.target)) pv_copy(target, FVPL_MAX_PATH, cfg.target);
+        else if (!pv_join(target, FVPL_MAX_PATH, basedir, cfg.target)) {
+            box(MB_ICONERROR, L"[launcher] exe 路径过长");
+            return 1;
+        }
+    } else if (!auto_detect(basedir, self_name, target, FVPL_MAX_PATH)) {
+        box(MB_ICONERROR,
+            L"没在这个目录找到可识别的 FVP 主程序:\n%s\n"
+            L"请在 fvp-launcher.ini 的 [launcher] 段写明:\n"
+            L"  exe = 游戏主程序.exe", basedir);
+        return 1;
+    }
+
+    if (!read_blob(target, &blob, &size)) { box(MB_ICONERROR, L"无法读取目标程序:\n%s", target); return 1; }
+    machine = (DWORD)pe_machine(blob, size);
+    HeapFree(GetProcessHeap(), 0, blob);
+    if (machine != (DWORD)OWN_MACHINE) {
+        box(MB_ICONERROR,
+            L"位数不匹配:\n%s\n是 %s 程序, 而本启动器是 %d 位版。\n请换用对应位数的 FVPLauncher。",
+            target, machine == (DWORD)FVPL_MACHINE_AMD64 ? L"64 位 (x64)" : L"32 位 (x86)", OWN_BITS);
+        return 1;
+    }
+
+    if (!pv_join(dll, FVPL_MAX_PATH, basedir, DLL_NAME)) { box(MB_ICONERROR, L"路径过长"); return 1; }
+    if (GetFileAttributesW(dll) == INVALID_FILE_ATTRIBUTES) {
+        box(MB_ICONERROR, L"缺少 %s\n它必须和启动器放在同一目录。", DLL_NAME);
+        return 1;
+    }
+
+    cap = (int)(sizeof(cmdline) / sizeof(cmdline[0]));
+    if (pv_len(target) + pv_len(cfg.params) + 8 >= cap) { box(MB_ICONERROR, L"命令行过长"); return 1; }
+    alog(L"目标程序: %s", target);
+    {
+        int len = 0;
+        append(cmdline, cap, &len, L"\"");
+        append(cmdline, cap, &len, target);
+        append(cmdline, cap, &len, L"\"");
+        if (cfg.params[0]) { append(cmdline, cap, &len, L" "); append(cmdline, cap, &len, cfg.params); }
+    }
+
+    RtlZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    RtlZeroMemory(&pi, sizeof(pi));
+    if (!CreateProcessW(NULL, cmdline, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
+                        cfg.workdir[0] ? cfg.workdir : basedir, &si, &pi)) {
+        box(MB_ICONERROR, L"启动失败:\n%s\nCreateProcessW GetLastError=%u",
+            target, (unsigned)GetLastError());
+        return 1;
+    }
+
+    if (!FvplInjectDll(pi.hProcess, pi.dwProcessId, dll, 20000, NULL, &fail_step)) {
+        /* 注入不成功就杀掉: 让游戏裸跑会把档写到真实 Documents, 正是要避免的事 */
+        box(MB_ICONERROR,
+            L"注入 %s 失败 (步骤: %s), 已终止游戏以免存档写到原始位置。\nGetLastError=%u",
+            DLL_NAME, fail_step ? fail_step : L"未知", (unsigned)GetLastError());
+        TerminateProcess(pi.hProcess, 1);
+    } else {
+        ResumeThread(pi.hThread);
+        alog(L"注入完成, 已放行 (pid=%u)", (unsigned)pi.dwProcessId);
+    }
+
+    if (pi.hThread) CloseHandle(pi.hThread);
+    if (pi.hProcess) CloseHandle(pi.hProcess);
+    return 0;
+}

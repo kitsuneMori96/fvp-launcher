@@ -132,7 +132,7 @@ static int auto_detect(const WCHAR *basedir, const WCHAR *self_name, WCHAR *out,
         WCHAR pat2[FVPL_MAX_PATH];
         WIN32_FIND_DATAW f2;
         HANDLE h2;
-        append(list, 1600, &len, L"目录里有多个 FVP 主程序, 已选中第一个:\n");
+        append(list, 1600, &len, L"这个文件夹里有不止一个可能的游戏主程序，这次先用第一个：\n");
         if (!pv_join(pat2, FVPL_MAX_PATH, basedir, L"*.exe")) return 0;
         h2 = FindFirstFileW(pat2, &f2);
         if (h2 != INVALID_HANDLE_VALUE) {
@@ -149,7 +149,8 @@ static int auto_detect(const WCHAR *basedir, const WCHAR *self_name, WCHAR *out,
             } while (FindNextFileW(h2, &f2));
             FindClose(h2);
         }
-        append(list, 1600, &len, L"\n建议在 [launcher] exe= 写死正确的主程序。");
+        append(list, 1600, &len, L"\n如果启动的不是你想玩的游戏：用记事本打开同目录的 fvp-launcher.ini，\n"
+                                   L"在开头的 [launcher] 下面写一行 exe = 想玩的主程序完整路径。");
         box(MB_ICONWARNING, L"%s", list);
     }
     return pv_copy(out, outcch, chosen);
@@ -229,10 +230,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 
     n = (int)GetModuleFileNameW(NULL, own, FVPL_MAX_PATH);
     if (n <= 0 || n >= FVPL_MAX_PATH) {
-        box(MB_ICONERROR, L"无法取得启动器自身路径 (GetLastError=%u)", (unsigned)GetLastError());
+        box(MB_ICONERROR, L"启动器没能读到自己的位置，无法继续。\n"
+            L"请把 FVPLauncher.exe 放在一个普通文件夹里再运行（不要直接从压缩包里运行）。\n\n"
+            L"(错误码 %u)", (unsigned)GetLastError());
         return 1;
     }
-    if (!pv_dirname(basedir, FVPL_MAX_PATH, own)) { box(MB_ICONERROR, L"启动器路径过长"); return 1; }
+    if (!pv_dirname(basedir, FVPL_MAX_PATH, own)) {
+        box(MB_ICONERROR, L"启动器所在的文件夹路径太长了，Windows 无法处理。\n"
+            L"请把游戏文件夹移到更短的位置（例如 D:\\games）再试。");
+        return 1;
+    }
     base_name(own, self_name, FVPL_MAX_PATH);
     if (pv_join(s_logpath, FVPL_MAX_PATH, basedir, L"fvpl_launcher.log"))
         alog(L"===== 启动 =====");
@@ -259,42 +266,66 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         FvplIni empty;
         int bad = (err[0] != 0);
         empty.n = 0;
-        if (!cfg_build(&empty, basedir, &cfg, err, 256)) { box(MB_ICONERROR, L"配置初始化失败"); return 1; }
-        if (bad) box(MB_ICONWARNING, L"fvp-launcher.ini 配置有误:\n%s\n已按默认值继续。", err);
+        if (!cfg_build(&empty, basedir, &cfg, err, 256)) {
+            box(MB_ICONERROR, L"读配置失败，启动器无法继续。\n"
+                L"请确认 fvp-launcher.ini 是普通文本文件，或者先把它删掉再试（删掉会用默认设置）。");
+            return 1;
+        }
+        if (bad) box(MB_ICONWARNING,
+            L"fvp-launcher.ini 里有看不懂的设置：\n%s\n\n本次先用默认设置启动。\n"
+            L"（可以删掉这个文件重新开始，或对照 fvp-launcher.ini.example 检查。）", err);
     }
 
     if (cfg.target[0]) {
         if (pv_is_abs(cfg.target)) pv_copy(target, FVPL_MAX_PATH, cfg.target);
         else if (!pv_join(target, FVPL_MAX_PATH, basedir, cfg.target)) {
-            box(MB_ICONERROR, L"[launcher] exe 路径过长");
+            box(MB_ICONERROR, L"配置文件里 [launcher] exe 写的路径太长了。\n"
+                L"请把游戏文件夹移到更短的位置（例如 D:\\games）再试。");
             return 1;
         }
     } else if (!auto_detect(basedir, self_name, target, FVPL_MAX_PATH)) {
         box(MB_ICONERROR,
-            L"没在这个目录找到可识别的 FVP 主程序:\n%s\n"
-            L"请在 fvp-launcher.ini 的 [launcher] 段写明:\n"
-            L"  exe = 游戏主程序.exe", basedir);
+            L"没有在这个文件夹里找到游戏主程序：\n%s\n\n"
+            L"请把 FVPLauncher.exe 和游戏主程序放在同一个文件夹里。\n"
+            L"如果游戏装在别的地方：用记事本打开同目录的 fvp-launcher.ini，\n"
+            L"在开头的 [launcher] 下面写一行：\n"
+            L"    exe = 游戏主程序的完整路径", basedir);
         return 1;
     }
 
-    if (!read_blob(target, &blob, &size)) { box(MB_ICONERROR, L"无法读取目标程序:\n%s", target); return 1; }
+    if (!read_blob(target, &blob, &size)) {
+        box(MB_ICONERROR, L"游戏主程序读不出来：\n%s\n\n"
+            L"可能文件不在了，或正被别的程序占用。请确认文件还在，然后重试。", target);
+        return 1;
+    }
     machine = (DWORD)pe_machine(blob, size);
     HeapFree(GetProcessHeap(), 0, blob);
     if (machine != (DWORD)OWN_MACHINE) {
         box(MB_ICONERROR,
-            L"位数不匹配:\n%s\n是 %s 程序, 而本启动器是 %d 位版。\n请换用对应位数的 FVPLauncher。",
+            L"版本不对：\n%s\n\n这是 %s 的游戏，而这个启动器是 %d 位的，两者必须一样。\n"
+            L"请改用对应位数的 FVPLauncher（x86 = 32 位，x64 = 64 位）。",
             target, machine == (DWORD)FVPL_MACHINE_AMD64 ? L"64 位 (x64)" : L"32 位 (x86)", OWN_BITS);
         return 1;
     }
 
-    if (!pv_join(dll, FVPL_MAX_PATH, basedir, DLL_NAME)) { box(MB_ICONERROR, L"路径过长"); return 1; }
+    if (!pv_join(dll, FVPL_MAX_PATH, basedir, DLL_NAME)) {
+        box(MB_ICONERROR, L"路径太长了，Windows 无法处理。\n"
+            L"请把游戏文件夹移到更短的位置（例如 D:\\games）再试。");
+        return 1;
+    }
     if (GetFileAttributesW(dll) == INVALID_FILE_ATTRIBUTES) {
-        box(MB_ICONERROR, L"缺少 %s\n它必须和启动器放在同一目录。", DLL_NAME);
+        box(MB_ICONERROR, L"缺少文件 %s。\n"
+            L"它必须和 FVPLauncher.exe 放在同一个文件夹里，\n"
+            L"请把安装包里的这几个文件一起复制到游戏文件夹。", DLL_NAME);
         return 1;
     }
 
     cap = (int)(sizeof(cmdline) / sizeof(cmdline[0]));
-    if (pv_len(target) + pv_len(cfg.params) + 8 >= cap) { box(MB_ICONERROR, L"命令行过长"); return 1; }
+    if (pv_len(target) + pv_len(cfg.params) + 8 >= cap) {
+        box(MB_ICONERROR, L"给游戏传的参数太长，无法启动。\n"
+            L"请检查 fvp-launcher.ini 里 [launcher] params 的内容。");
+        return 1;
+    }
     alog(L"目标程序: %s", target);
     {
         int len = 0;
@@ -309,16 +340,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     RtlZeroMemory(&pi, sizeof(pi));
     if (!CreateProcessW(NULL, cmdline, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
                         cfg.workdir[0] ? cfg.workdir : basedir, &si, &pi)) {
-        box(MB_ICONERROR, L"启动失败:\n%s\nCreateProcessW GetLastError=%u",
-            target, (unsigned)GetLastError());
+        box(MB_ICONERROR, L"游戏启动失败：\n%s\n\n"
+            L"可能文件被占用或没有权限（可以试试右键“以管理员身份运行”）。\n\n"
+            L"(错误码 %u)", target, (unsigned)GetLastError());
         return 1;
     }
 
     if (!FvplInjectDll(pi.hProcess, pi.dwProcessId, dll, 20000, NULL, &fail_step)) {
         /* 注入不成功就杀掉: 让游戏裸跑会把档写到真实 Documents, 正是要避免的事 */
         box(MB_ICONERROR,
-            L"注入 %s 失败 (步骤: %s), 已终止游戏以免存档写到原始位置。\nGetLastError=%u",
-            DLL_NAME, fail_step ? fail_step : L"未知", (unsigned)GetLastError());
+            L"启动器没能接通游戏。\n原因：%s\n\n"
+            L"为避免存档被写乱，已经把游戏关掉了。\n"
+            L"常见原因：杀毒软件拦截、游戏被别的程序占用。\n"
+            L"重试仍失败时，请把游戏文件夹里的 fvpl_hook.log 发给作者。\n\n"
+            L"(错误码 %u)", fail_step ? fail_step : L"未知原因", (unsigned)GetLastError());
         TerminateProcess(pi.hProcess, 1);
     } else {
         ResumeThread(pi.hThread);

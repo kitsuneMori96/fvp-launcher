@@ -16,6 +16,10 @@ folder_ids = 5           ; 被改写的 CSIDL 列表 (5=Documents), 逗号分隔
 
 [nls]
 codepage = 932           ; 虚拟 ACP: 932=日文 936=简体 950=繁体 1252=拉丁
+; ↑ 最安全的填法是"宿主系统真实 ACP"(中文 Windows = 936)。
+;   实测: 中文 Windows 上为了跑日文原版填 932, 引擎却是拿宿主 ACP(936) 的字节拼资源路径的,
+;   谎报后 A↔W 往返不再恒等 → 游戏自己弹「graph/main_windowのオープンに失敗しました」。
+;   只有"非日文区 Windows + 纯日文游戏"才需要 932 —— 那正是替代 Locale Emulator 的用法。
 font_charset = 128       ; GDI 字符集: 128=SHIFTJIS 134=GB2312 136=Big5 0=Default
 virtualize_files = 1     ; 把 CreateFileA 等文件 API 换成按 codepage 解释的 W 版
 virtualize_ui = 1        ; 虚拟化 LoadStringA / MessageBoxA / CreateFontA / GetGlyphOutlineA

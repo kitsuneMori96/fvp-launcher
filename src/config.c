@@ -161,16 +161,16 @@ int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
     if (!s || !*s) s = L"userdata";
     if (pv_is_abs(s)) pv_copy(out->save_path, FVPL_MAX_PATH, s);
     else if (!pv_join(out->save_path, FVPL_MAX_PATH, basedir, s)) {
-        if (err) pv_copy(err, errcch, L"save path 过长");
+        if (err) pv_copy(err, errcch, L"[save] path 写的路径太长了，请把游戏文件夹移到更短的位置");
         return 0;
     }
     if (!pv_norm(out->save_path, FVPL_MAX_PATH)) {
-        if (err) pv_copy(err, errcch, L"save path 过长或无法归一化");
+        if (err) pv_copy(err, errcch, L"[save] path 看不懂；可以填 .（=游戏目录）、userdata，\n或 D:\\saves\\xxx 这样的完整路径");
         return 0;
     }
     if (pv_ci_equal(out->save_path, basedir) && out->save_migrate) {
         /* 存档目录 == 游戏目录时, 迁移会把 Documents\FAVORITE 灌进游戏根, 风险不可控 */
-        if (err) pv_copy(err, errcch, L"save path 不能等于游戏目录 (除非关闭 migrate)");
+        if (err) pv_copy(err, errcch, L"[save] path 填了 .（=游戏目录），同时 migrate 又是 1，\n这两个不能一起用：要么把 path 改成 userdata，要么把 migrate 改成 0");
         return 0;
     }
     pv_strip_sep(out->save_path);
@@ -203,7 +203,7 @@ int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
     out->lcid             = (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"lcid", 0);
     if (out->codepage == 0 || out->codepage == 1) {
         /* 0=CP_ACP(正是要虚拟掉的), 1=CP_OEMCP —— 都会让 hook 递归或语义反转 */
-        if (err) pv_copy(err, errcch, L"codepage 不能是 0 或 1");
+        if (err) pv_copy(err, errcch, L"[nls] codepage 不能填 0 或 1，\n请填 932 / 936 / 950 / 949 / 1252 / 65001 其中之一");
         return 0;
     }
     return 1;

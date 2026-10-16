@@ -73,12 +73,12 @@ int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeou
     HANDLE ht;
     DWORD wait;
     ULONG_PTR ret = 0;
-    if (fail_step) *fail_step = L"未知环节";
+    if (fail_step) *fail_step = L"未知原因";
     cb = ((SIZE_T)lstrlenW(dllpath) + 1) * sizeof(WCHAR);
-    if (fail_step) *fail_step = L"远端内存分配";
+    if (fail_step) *fail_step = L"无法在游戏进程里申请内存（常被杀毒软件拦截）";
     remote = VirtualAllocEx(hProcess, NULL, cb, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (remote == NULL) return 0;
-    if (fail_step) *fail_step = L"写入 DLL 路径";
+    if (fail_step) *fail_step = L"无法把启动文件写进游戏进程（常被杀毒软件拦截）";
     if (!WriteProcessMemory(hProcess, remote, dllpath, cb, &wrote) || wrote != cb) {
         VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
         return 0;
@@ -86,11 +86,11 @@ int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeou
     k32 = GetModuleHandleW(L"kernel32.dll");
     pLoad = k32 ? GetProcAddress(k32, "LoadLibraryW") : NULL;
     if (pLoad == NULL) {
-        if (fail_step) *fail_step = L"定位 LoadLibraryW";
+        if (fail_step) *fail_step = L"系统缺少必要的组件";
         VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
         return 0;
     }
-    if (fail_step) *fail_step = L"创建远端线程";
+    if (fail_step) *fail_step = L"无法让游戏加载启动文件（常被杀毒软件拦截）";
     /* LoadLibraryW 的签名和线程入口本就不一致, 这是远线程注入的固定写法 */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-function-type"
@@ -102,7 +102,7 @@ int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeou
     }
     wait = WaitForSingleObject(ht, timeout_ms);
     if (wait != WAIT_OBJECT_0) {
-        if (fail_step) *fail_step = L"等待注入超时";
+        if (fail_step) *fail_step = L"等待游戏响应超时（常被杀毒软件拦截）";
         TerminateThread(ht, 1);
         CloseHandle(ht);
         VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
@@ -116,7 +116,7 @@ int FvplInjectDll(HANDLE hProcess, DWORD pid, const WCHAR *dllpath, DWORD timeou
     CloseHandle(ht);
     VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
     if (ret == 0 && !child_has_dll(pid, dllpath)) {
-        if (fail_step) *fail_step = L"远端 LoadLibrary 失败 (DLL 缺失、位数不符或被拦截)";
+        if (fail_step) *fail_step = L"游戏加载启动文件失败（文件缺失、版本不符或被拦截）";
         return 0;
     }
     if (module_base) *module_base = ret;

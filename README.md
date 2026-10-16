@@ -111,6 +111,34 @@ virtualize_ui = 0        ; 关键: 汉化自带文本层时必须关
   是"子进程注入 + 存档重定向"; 到了日文区 Windows 上, 同一个 ini 才真正靠这批 hook 把 ACP
   假扮成 936, 顶掉外挂 Locale Emulator 的作用。
 
+实测样例 —— **紅い瞳に映るセカイ (日文原版, 装在中文 Windows 上)**:
+
+```ini
+[launcher]
+exe = D:\soft\君が朱眸に映す五彩の世界\Shinku.exe
+
+[save]
+redirect = 1
+path = .
+migrate = 0
+
+[nls]
+codepage = 936           ; 关键: 必须等于宿主真实 ACP (这台机器是 936)
+virtualize_files = 0
+virtualize_ui = 0
+```
+
+- **日文原版 + 中文 Windows 上 `codepage` 不要填 932** (实测踩过): 引擎是先用宿主 ACP(936)
+  的字节拼资源路径 (如 `graph/main_window`), 再交给 ANSI API 的; 一旦把 ACP 谎报成 932,
+  非 ASCII 路径的 A↔W 往返就不再恒等, 玩家会看到游戏自己弹的
+  「graph/main_windowのオープンに失敗しました」。改成宿主真实值 (936) 即恢复正常。
+  对照实验: 同一个 ini 其它都不动, 只把 `codepage` 从 932 改成 936 —— 932 弹框, 936 正常。
+- 所以 `[nls] codepage` 表达的不是"游戏是什么语言", 而是"要让系统 API 假装成哪个区域":
+  日文区 Windows 上跑汉化版填 936 (假扮中文); 中文 Windows 上跑日文原版填 936 (保持真实);
+  只有"非日文区 Windows + 纯日文引擎"才填 932。
+- 这个游戏没有 `SakuraChs.exe` 那样的 `CREATE_SUSPENDED` 链, `inject_children` 保持默认 1 即可
+  (只有链式启动的汉化版才走 `--inject-ready` 延迟注入)。
+
 ## 已知边界
 
 - 不做跨位数注入 (32 位启动器不注 64 位游戏), 需要哪种就放哪套产物。

@@ -165,7 +165,8 @@ static void do_init(void) {
         FvplIni empty;
         empty.n = 0;
         if (!cfg_build(&empty, basedir, &g_cfg, err, 256)) { s_state = 3; return; }
-        warn_once(L"fvp-launcher.ini 配置有误, 已按默认值运行。");
+        warn_once(L"fvp-launcher.ini 里有看不懂的设置，这次先用默认设置运行。\n"
+                  L"（可以删掉这个文件重新开始。）");
     }
     if (!g_cfg.save_redirect) { s_base[0] = 0; s_state = 2; return; }
 
@@ -212,9 +213,12 @@ int FvplW2A(const WCHAR *w, char *a, int cch) {
 const WCHAR *FvplSaveDirW(void) {
     if (!FvplReady() || !g_cfg.save_redirect) return NULL;
     if (!s_base_ok) {
-        warn_once(L"存档目录无法用当前 codepage 无损表示,\n"
-                  L"存档重定向已自动关闭 (保持游戏原行为)。\n"
-                  L"请把游戏放到能被该代码页表示的路径, 或换 codepage。");
+        warn_once(L"这个游戏的文件夹路径里有当前「文字编码」存不下的字符，\n"
+                  L"所以「把存档存到游戏目录」这个功能先关掉了，游戏本身不受影响，\n"
+                  L"存档会像以前一样放在「文档」里。\n\n"
+                  L"想让存档存到游戏目录，二选一：\n"
+                  L"· 把游戏文件夹改成纯英文/数字的名字（例如 D:\\games\\irotoridori）\n"
+                  L"· 或用记事本打开 fvp-launcher.ini，把 [nls] 下面的 codepage 改成 936");
         return NULL;
     }
     return s_base;

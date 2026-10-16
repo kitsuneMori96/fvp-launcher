@@ -9,7 +9,8 @@
  *   - 存档标题走 LoadStringA: 资源里的宽字符串被按 ACP 降级, 换页会换目录名。
  * 刻意不碰的东西: RegisterClassExA / DispatchMessageA / DefWindowProcA。
  *   把窗口转成 W 形态会让系统给引擎的 A 版窗口过程发 W 版消息,
- *   轻则 WM_GETTEXT 缓冲区语义错位。标题乱码属于外观问题, 用 SetWindowTextW 补。 */
+ *   轻则 WM_GETTEXT 缓冲区语义错位。标题乱码只针对引擎实际走的
+ *   SendMessageA(WM_SETTEXT) 单点纠正 (它不导入 SetWindowTextA), 不动消息回路。 */
 #include "hooks.h"
 #include "pathutil.h"
 #include <stdint.h>
@@ -34,6 +35,7 @@ typedef DWORD (WINAPI *PFN_GetGlyphOutlineA)(HDC, UINT, UINT, LPGLYPHMETRICS, DW
 typedef int (WINAPI *PFN_lstrcmpiA)(LPCSTR, LPCSTR);
 typedef uint32_t (WINAPI *PFN_GetOEMCP)(void);
 typedef BOOL (WINAPI *PFN_IsValidCodePage)(UINT);
+typedef LRESULT (WINAPI *PFN_SendMessageA)(HWND, UINT, WPARAM, LPARAM);
 
 static PFN_GetACP            o_GetACP;
 static PFN_GetCPInfo         o_GetCPInfo;
@@ -49,6 +51,7 @@ static PFN_GetStringTypeA    o_GetStringTypeA;
 static PFN_LoadStringA       o_LoadStringA;
 static PFN_MessageBoxA       o_MessageBoxA;
 static PFN_CreateWindowExA   o_CreateWindowExA;
+static PFN_SendMessageA      o_SendMessageA;
 static PFN_CreateFontA       o_CreateFontA;
 static PFN_GetGlyphOutlineA  o_GetGlyphOutlineA;
 static PFN_lstrcmpiA         o_lstrcmpiA;
@@ -174,6 +177,20 @@ static HWND WINAPI Hook_CreateWindowExA(DWORD exstyle, LPCSTR cls, LPCSTR title,
     return hw;
 }
 
+/* 标题栏: Sakura.exe 不导入 SetWindowTextA, 主窗口标题走 SendMessageA(WM_SETTEXT)。
+ * 系统按真实 ACP(936) 把 SJIS 串转成 W 就成乱码, 且这一步会覆盖建窗时的纠正。
+ * 这里自己按虚拟代码页解码后转投 SendMessageW。只动 WM_SETTEXT, 其余原样透传。 */
+static LRESULT WINAPI Hook_SendMessageA(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
+    if (!ui_on() || o_SendMessageA == NULL)
+        return o_SendMessageA ? o_SendMessageA(hw, msg, wp, lp) : 0;
+    if (msg == WM_SETTEXT && lp != 0) {
+        WCHAR wt[1024];
+        if (FvplA2W((LPCSTR)lp, wt, (int)(sizeof(wt) / sizeof(wt[0]))) > 0)
+            return SendMessageW(hw, WM_SETTEXT, wp, (LPARAM)wt);
+    }
+    return o_SendMessageA(hw, msg, wp, lp);
+}
+
 static HFONT WINAPI Hook_CreateFontA(int height, int width, int escapement, int orientation,
                                      int weight, DWORD italic, DWORD underline, DWORD strikeout,
                                      DWORD charset, DWORD outprec, DWORD clipprec, DWORD quality,
@@ -204,7 +221,10 @@ static DWORD WINAPI Hook_GetGlyphOutlineA(HDC dc, UINT uchar, UINT format, LPGLY
     UINT u;
     if (!ui_on() || o_GetGlyphOutlineA == NULL)
         return o_GetGlyphOutlineA ? o_GetGlyphOutlineA(dc, uchar, format, gm, cbbuf, buf, m2) : GDI_ERROR;
-    if (o_IsDBCSLeadByteEx != NULL && o_IsDBCSLeadByteEx(cp, (BYTE)(uchar >> 8))) {
+    /* 直接调真实的 IsDBCSLeadByteEx: 引擎并不导入它, o_IsDBCSLeadByteEx 恒为 NULL,
+     * 用它判前导码会把双字节假名当单字节, 转换失败 -> 画成 '?'。
+     * fvpl_hook.dll 自己的 IAT 从不被改写 (sweep 只过 CreateProcess), 所以这里是真 kernel32。 */
+    if (IsDBCSLeadByteEx(cp, (BYTE)(uchar >> 8))) {
         mb[0] = (char)((uchar >> 8) & 0xFF);
         mb[1] = (char)(uchar & 0xFF);
         len = 2;
@@ -237,6 +257,7 @@ static const FvplPatch s_tbl[] = {
     { "user32.dll",   "LoadStringA",          (void *)Hook_LoadStringA,         (void **)&o_LoadStringA },
     { "user32.dll",   "MessageBoxA",          (void *)Hook_MessageBoxA,         (void **)&o_MessageBoxA },
     { "user32.dll",   "CreateWindowExA",      (void *)Hook_CreateWindowExA,     (void **)&o_CreateWindowExA },
+    { "user32.dll",   "SendMessageA",         (void *)Hook_SendMessageA,        (void **)&o_SendMessageA },
     { "gdi32.dll",    "CreateFontA",          (void *)Hook_CreateFontA,         (void **)&o_CreateFontA },
     { "gdi32.dll",    "GetGlyphOutlineA",     (void *)Hook_GetGlyphOutlineA,    (void **)&o_GetGlyphOutlineA },
 };

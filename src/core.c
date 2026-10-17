@@ -228,6 +228,20 @@ static void do_init(void) {
         warn_once(L"fvp-launcher.ini 里有看不懂的设置，这次先用默认设置运行。\n"
                   L"（可以删掉这个文件重新开始。）");
     }
+    /* 把最终生效的码页/文本层配置写进日志: 「乱码但说不清哪层在管」这类问题
+     * 只能靠这一行定位 (文本层未开时所有字体钩子都是透传, 表现＝游戏原样)。 */
+    {
+        char msg[192];
+        _snprintf(msg, sizeof(msg),
+                  "cfg host_acp=%u cp=%u text_cp=%u charset=%u ui=%d files=%d "
+                  "redir=%d inject=%d lcid=%u",
+                  (unsigned)FvplHostAcp(), (unsigned)g_cfg.codepage,
+                  (unsigned)g_cfg.text_codepage, (unsigned)g_cfg.font_charset,
+                  g_cfg.virtualize_ui, g_cfg.virtualize_files, g_cfg.save_redirect,
+                  g_cfg.inject_children, (unsigned)g_cfg.lcid);
+        msg[sizeof(msg) - 1] = 0;
+        FvplLog(msg);
+    }
     if (!g_cfg.save_redirect) { s_base[0] = 0; s_state = 2; return; }
 
     pv_copy(s_base, FVPL_MAX_PATH, g_cfg.save_path);

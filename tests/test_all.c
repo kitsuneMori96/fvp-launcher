@@ -116,6 +116,16 @@ static void t_config(void) {
         CHECK(cfg_ini_get(&e, L"launcher", L"workdir") && cfg_ini_get(&e, L"launcher", L"workdir")[0] == 0, "empty value stays empty");
     }
     {
+        /* [launcher] icon: 绝对路径原样保留, 相对路径对 basedir 解析, 缺省为空 */
+        FvplIni e;
+        cfg_ini_parse(L"[launcher]\nicon = D:\\icons\\my.ico\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g\\Sakura", &c, err, 128) == 1 && pv_ci_equal(c.icon, L"D:\\icons\\my.ico"), "abs icon kept");
+        cfg_ini_parse(L"[launcher]\nicon = my.ico\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g\\Sakura", &c, err, 128) == 1 && pv_ci_equal(c.icon, L"C:\\g\\Sakura\\my.ico"), "relative icon resolves to game dir");
+        cfg_ini_parse(L"[launcher]\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.icon[0] == 0, "icon default empty");
+    }
+    {
         FvplIni e;
         cfg_ini_parse(L"[nls]\ncodepage=0\n", &e);
         CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 0, "codepage 0 refused");

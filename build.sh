@@ -11,6 +11,8 @@ DIST=dist
 PURE="src/pathutil.c src/utf8w.c src/config.c src/peinfo.c"
 HOOK="src/dllmain.c src/core.c src/iat.c src/hook_io.c src/hook_nls.c src/hook_proc.c src/winutil.c"
 COMMON_FLAGS="-O2 -std=c11 -Wall -Wextra -Werror -fno-strict-aliasing -fshort-wchar"
+# 换图标工具是独立小工具, 只求体积小: -Os + 段回收 + strip (约 15KB)
+TOOL_FLAGS="-Os -std=c11 -Wall -Wextra -Werror -fno-strict-aliasing -fshort-wchar -municode -static -ffunction-sections -fdata-sections -Wl,--gc-sections -s"
 
 echo "== 1/3 host 纯逻辑单测 =="
 gcc $COMMON_FLAGS -o /tmp/fvpl_test tests/test_all.c $PURE >"$LOG" 2>&1
@@ -36,6 +38,8 @@ build_pair() {   # $1=arch(-m32/-m64) $2=编译器 $3=输出目录
         -o "$DIST/$out/fvpl_hook.dll" $HOOK src/config.c src/pathutil.c src/peinfo.c \
         src/utf8w.c -luser32 -lgdi32 -lshell32 -lole32 -luuid 2>&1 | tee -a "$LOG"
     test -f "$DIST/$out/fvpl_hook.dll"
+    "$cc-gcc" $TOOL_FLAGS -o "$DIST/$out/FVPIcon.exe" tools/fvpicon.c 2>&1 | tee -a "$LOG"
+    test -f "$DIST/$out/FVPIcon.exe"
     ls -l "$DIST/$out"
 }
 
@@ -45,6 +49,18 @@ build_pair i686-w64-mingw32 x86
 echo
 echo "== 3/3 x64 =="
 build_pair x86_64-w64-mingw32 x64
+
+echo
+echo "== 产物汇总 =="
+for out in x86 x64; do
+    for f in FVPLauncher.exe fvpl_hook.dll FVPIcon.exe; do
+        if [ -f "$DIST/$out/$f" ]; then
+            printf '  %-26s %8s bytes\n' "dist/$out/$f" "$(stat -c%s "$DIST/$out/$f")"
+        else
+            printf '  %-26s %8s\n' "dist/$out/$f" "缺失!"
+        fi
+    done
+done
 
 echo
 echo "BUILD OK"

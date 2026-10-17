@@ -10,6 +10,7 @@
 | --- | --- |
 | `FVPLauncher.exe` | 找到游戏主程序 → `CREATE_SUSPENDED` 起进程 → 注入 `fvpl_hook.dll` → 放行 |
 | `fvpl_hook.dll` | 只改游戏主模块的**导入表** (IAT hook), 实现存档重定向 + 代码页虚拟化 |
+| `FVPIcon.exe` | 独立的换图标小工具: 把 `.ico` 写进任意 exe 的图标资源 (见 [换图标](#换图标)) |
 | `fvp-launcher.ini` | 配置, 与 `FVPLauncher.exe` 同目录; 没有也能跑 (全默认值) |
 
 x86 / x64 各一套 (`dist/x86`, `dist/x64`), 位数必须和游戏 exe 一致, 启动器会校验并拒绝错配。
@@ -156,6 +157,29 @@ virtualize_ui = 0
   只有"非日文区 Windows + 纯日文引擎"才填 932。
 - 这个游戏没有 `SakuraChs.exe` 那样的 `CREATE_SUSPENDED` 链, `inject_children` 保持默认 1 即可
   (只有链式启动的汉化版才走 `--inject-ready` 延迟注入)。
+
+## 换图标
+
+两种图标互不相干, 可以只用其中一种。
+
+**1) 游戏窗口图标** —— 在游戏目录的 `fvp-launcher.ini` 的 `[launcher]` 里写一行:
+
+```ini
+[launcher]
+icon = D:\icons\xxx.ico
+```
+
+`fvpl_hook.dll` 会在游戏窗口出现后把它换成这个图标 (进程运行期间一直有效)。也可以填另一个
+`.exe` 的路径, 会取它里面的第 0 号图标; 相对路径按游戏目录解析。留空 = 不动。
+
+**2) exe 文件本身的图标** —— 用 `FVPIcon.exe` (随发布包一起分发) 往 exe 里写图标资源:
+
+```bat
+FVPIcon.exe FVPLauncher.exe my.ico              :: 就地改, 改前留一份 FVPLauncher.exe.bak
+FVPIcon.exe FVPLauncher.exe my.ico -o 我的启动器.exe   :: 另存为, 不动原文件
+```
+
+`my.ico` 里的多张尺寸会全部写进目标 (用于资源管理器在不同视图下选合适的尺寸)。
 
 ## 已知边界
 

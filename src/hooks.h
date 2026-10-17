@@ -19,6 +19,7 @@ int   FvplTextA2W(const char *a, WCHAR *w, int cch);
 int   FvplTextW2A(const WCHAR *w, char *a, int cch);
 const WCHAR *FvplSaveDirW(void);   /* 重定向后的存档根 (未启用时为 NULL) */
 void  FvplMigratePathW(const WCHAR *path); /* 游戏访问 path 时按需搬这一份旧存档 */
+void  FvplApplyWindowIcon(void);   /* [launcher] icon 非空时: 找到游戏窗口并换图标 (内部重试) */
 void  FvplLog(const char *what);   /* 可选诊断, 输出到 fvpl_hook.log */
 
 /* hook_nls.c / hook_io.c / hook_proc.c */

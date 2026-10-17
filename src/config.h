@@ -39,6 +39,7 @@ typedef struct {
                                  * 只影响文本/字体/字形 API, GetACP 与文件路径仍用 codepage */
     fvpl_uint  font_charset;    /* GDI charset, 128=SHIFTJIS 134=GB2312 136=Big5 */
     fvpl_wchar font_face[64];   /* 非空 = 连字型一起强制 (最多 31 字符) */
+    fvpl_wchar icon[FVPL_MAX_PATH]; /* 非空 = 换成这个 .ico / .exe 的图标 (已解析为绝对路径) */
     int        virtualize_files;
     int        virtualize_ui;
     fvpl_uint  lcid;            /* 0 = 不动 CompareStringA 的 locale */

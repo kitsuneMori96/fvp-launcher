@@ -179,6 +179,14 @@ int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
         pv_norm(out->workdir, FVPL_MAX_PATH);
     }
 
+    /* 运行时换游戏窗口图标: 相对路径按上面 [launcher] 的规则对 basedir 解析 */
+    s = cfg_ini_get(ini, SEC_LAU, L"icon");
+    if (s && *s) {
+        if (pv_is_abs(s)) pv_copy(out->icon, FVPL_MAX_PATH, s);
+        else pv_join(out->icon, FVPL_MAX_PATH, basedir, s);
+        pv_norm(out->icon, FVPL_MAX_PATH);
+    }
+
     out->save_redirect = cfg_ini_int(ini, SEC_SAVE, L"redirect", 1);
     out->save_migrate  = cfg_ini_int(ini, SEC_SAVE, L"migrate", 1);
     s = cfg_ini_get(ini, SEC_SAVE, L"migrate_names");

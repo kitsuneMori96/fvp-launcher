@@ -3,6 +3,7 @@
 #include "pathutil.h"
 #include "winutil.h"
 #include <shlobj.h>
+#include <shellapi.h>
 #include <stdio.h>
 
 FvplConfig g_cfg;
@@ -296,4 +297,86 @@ const WCHAR *FvplSaveDirW(void) {
         return NULL;
     }
     return s_base;
+}
+
+/* ---- [launcher] icon: 运行时给游戏窗口换图标 ------------------------------
+ * 只影响外观: 换成配置里的 .ico (或 .exe 里的第 0 号图标)。游戏窗口一般比 DLL 晚
+ * 建好, 所以这里 250ms 一步地找, 最多试 ~20 秒; 找不到就放弃 (不打扰游戏)。 */
+typedef struct { HWND best; LONG area; } IconFind;
+
+static BOOL CALLBACK icon_find_cb(HWND hwnd, LPARAM lp) {
+    IconFind *c = (IconFind *)lp;
+    DWORD pid = 0;
+    WCHAR cls[64];
+    RECT r;
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId()) return TRUE;
+    cls[0] = 0;
+    GetClassNameW(hwnd, cls, 64);
+    if (lstrcmpW(cls, L"HS_MAIN_WINDOW_CLASS00") == 0) { c->best = hwnd; return FALSE; }
+    if (GetWindowRect(hwnd, &r)) {          /* 没有指定类名时取面积最大的可见顶层窗口 */
+        LONG a = (r.right - r.left) * (r.bottom - r.top);
+        if (a > c->area) { c->area = a; c->best = hwnd; }
+    }
+    return TRUE;
+}
+
+static void log_wide(const WCHAR *w) {
+    char m[1024];
+    if (WideCharToMultiByte(CP_UTF8, 0, w, -1, m, (int)sizeof(m), NULL, NULL) > 0)
+        FvplLog(m);
+}
+
+void FvplApplyWindowIcon(void) {
+    WCHAR path[FVPL_MAX_PATH], exe[FVPL_MAX_PATH], dir[FVPL_MAX_PATH];
+    HICON big = NULL, small = NULL;
+    int tries;
+
+    if (g_cfg.icon[0] == 0) return;
+
+    if (pv_is_abs(g_cfg.icon)) {
+        if (!pv_copy(path, FVPL_MAX_PATH, g_cfg.icon)) return;
+    } else {
+        if (GetModuleFileNameW(NULL, exe, FVPL_MAX_PATH) == 0) return;
+        if (!pv_dirname(dir, FVPL_MAX_PATH, exe)) return;
+        if (!pv_join(path, FVPL_MAX_PATH, dir, g_cfg.icon)) return;
+    }
+
+    big = (HICON)LoadImageW(NULL, path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+    if (big) {
+        small = (HICON)LoadImageW(NULL, path, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                  GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE);
+    } else if (pv_ends_with_ci(path, L".exe")) {
+        /* 不是能直接当图片读的文件: 试试当成另一个 exe, 取它的第 0 号图标 */
+        if (ExtractIconExW(path, 0, &big, &small, 1) <= 0) { big = NULL; small = NULL; }
+    }
+    if (!big) {
+        WCHAR w[1024];
+        _snwprintf(w, 1024, L"窗口图标: 读不到 %s", path);
+        w[1023] = 0;
+        log_wide(w);
+        return;
+    }
+    if (!small) small = big;
+
+    for (tries = 0; tries < 80; tries++) {
+        IconFind c;
+        c.best = NULL;
+        c.area = 0;
+        EnumWindows(icon_find_cb, (LPARAM)&c);
+        if (c.best) {
+            WCHAR w[1024];
+            SendMessageW(c.best, WM_SETICON, ICON_BIG, (LPARAM)big);
+            SendMessageW(c.best, WM_SETICON, ICON_SMALL, (LPARAM)small);
+            SetClassLongPtrW(c.best, GCLP_HICON, (LONG_PTR)big);
+            SetClassLongPtrW(c.best, GCLP_HICONSM, (LONG_PTR)small);
+            _snwprintf(w, 1024, L"窗口图标已应用: %s", path);
+            w[1023] = 0;
+            log_wide(w);
+            return;
+        }
+        Sleep(250);
+    }
+    log_wide(L"窗口图标: 没找到窗口, 跳过");
 }

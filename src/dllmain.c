@@ -75,7 +75,11 @@ static DWORD WINAPI watch_children(LPVOID arg) {
     const FvplPatch *t;
     int n, pass;
     (void)arg;
-    if (!FvplReady() || !g_cfg.inject_children) return 0;
+    if (!FvplReady()) return 0;
+    /* [launcher] icon: 窗口建好得比注入晚, 这里 250ms 步进最多试 ~20 秒
+     * (函数内部自己重试)。与 inject_children 无关, 所以放在早退之前。 */
+    FvplApplyWindowIcon();
+    if (!g_cfg.inject_children) return 0;
     t = FvplTableProc(&n);
     for (pass = 0; pass < 40; pass++) {
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());

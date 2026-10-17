@@ -7,6 +7,7 @@ exe =                    ; 留空 = 扫描本目录, 挑出导入 shell32!SHGetF
 params =                 ; 附加命令行参数, 原样拼在 exe 路径后面
 workdir =                ; 留空 = 启动器所在目录
 inject_children = 1      ; 汉化版是 SakuraChs.exe -> Sakura.exe 链式启动, 需要 1 (内置默认 0)
+; icon =                 ; 换游戏窗口图标: 填 .ico (或另一个 .exe) 的路径; 相对路径按游戏目录解析
 
 [save]
 ; 整段省略 = redirect 1 / path userdata / migrate 1

@@ -29,7 +29,7 @@ folder_ids = 5           ; 被改写的 CSIDL 列表 (5=Documents), 逗号分隔
 ;   实测: 中文 Windows 上为了跑日文原版填 932, 引擎却是拿宿主 ACP(936) 的字节拼资源路径的,
 ;   谎报后 A↔W 往返不再恒等 → 游戏自己弹「graph/main_windowのオープンに失敗しました」。
 ;   只有"非日文区 Windows + 纯日文游戏"才需要 932 —— 那正是替代 Locale Emulator 的用法。
-; font_charset = 128     ; GDI 字符集; 留空/删掉 = 按 codepage 推导 (932→128 936→134 950→136 949→129)
+; font_charset = 128     ; GDI 字符集; 留空/删掉 = 按文本层码页推 (932→128 936→134 950→136 949→129 65001→默认)
 virtualize_files = 1     ; 把 CreateFileA 等文件 API 换成按 codepage 解释的 W 版
 ; text_codepage = 936    ; 【文字层】单独一档: 界面/剧本字节用哪个码页变成字形。留空/0 = 完全不碰
 ; ↑ codepage 管的是"系统 API 假装成哪个区域"(路径、句柄名), text_codepage 管的是"画面上的字怎么画"。

@@ -159,6 +159,44 @@ static void t_config(void) {
         cfg_ini_parse(L"", &e);
         CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.codepage == 932 && c.font_charset == 128, "jp host derives shiftjis charset");
     }
+    {
+        /* 文本层预留的四档: SJIS / GBK / Big5 / CP949 / UTF-8 都要原样收下,
+         * 并把字体字符集跟着文本层推 (Hermit 的编辑器 0x0E 一跑最多 255 字节,
+         * UTF-8 一个汉字 3 字节, 同长度装的字更少, 所以这档必须留得住) */
+        FvplIni e;
+        cfg_set_host_acp(936);
+        {
+            static const struct { const fvpl_wchar *ini; fvpl_uint cp; fvpl_uint cs; const char *why; } k[] = {
+                { L"[nls]\ntext_codepage = 932\n",  932,  128, "sjis kept" },
+                { L"[nls]\ntext_codepage = 936\n",  936,  134, "gbk kept" },
+                { L"[nls]\ntext_codepage = 950\n",  950,  136, "big5 kept" },
+                { L"[nls]\ntext_codepage = 949\n",  949,  129, "korean kept" },
+                { L"[nls]\ntext_codepage = 65001\n", 65001, 1,  "utf-8 kept (no font charset of its own)" }
+            };
+            size_t i;
+            for (i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+                cfg_ini_parse(k[i].ini, &e);
+                CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 &&
+                      c.text_codepage == k[i].cp && c.font_charset == k[i].cs &&
+                      c.codepage == 936 && c.virtualize_ui == 1, k[i].why);
+            }
+        }
+        /* 显式给了 font_charset 就别再推导 (UTF-8 作品想钉死某套字库的通道) */
+        cfg_ini_parse(L"[nls]\ntext_codepage = 65001\nfont_charset = 134\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.text_codepage == 65001 &&
+              c.font_charset == 134, "explicit font_charset wins");
+        /* 不填 = 文本层关闭: 字体/界面按系统码页解释, 这是混码作品唯一能跑的姿态 */
+        cfg_ini_parse(L"[nls]\ncodepage = 936\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.text_codepage == 0 &&
+              c.font_charset == 134 && c.virtualize_ui == 0, "text layer off by default");
+        /* 1 = CP_OEMCP, 语义与预期相反, 必须给人类可读的拒绝 */
+        cfg_ini_parse(L"[nls]\ntext_codepage = 1\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 0, "text_codepage 1 refused");
+        /* 旧键 font_fix = 1 等价于"按系统码页做字体修正", 不能把文本层推成 0 */
+        cfg_ini_parse(L"[nls]\nfont_fix = 1\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.text_codepage == 936 &&
+              c.virtualize_ui == 1, "legacy font_fix still turns the text layer on");
+    }
 }
 
 static void t_pe(const char *path) {

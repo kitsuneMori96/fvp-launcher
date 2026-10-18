@@ -90,7 +90,7 @@ migrate = 1
 | `[save] redirect` / `path` | `1` / `userdata` | 存档根落到游戏目录下的 `userdata`, 不是系统"文档" |
 | `[save] migrate` | `1` | 首启把"文档"里的老档**复制**过来 (源不删, 已存在的目标文件跳过) |
 | `[nls] codepage` | **本机真实 ACP** | 中文 Windows = 936。谎报别的值会破坏非 ASCII 路径的 A↔W 往返 (见实测样例) |
-| `[nls] font_charset` | 按 codepage 推导 | 932→128 936→134 950→136 949→129 1252→0 |
+| `[nls] font_charset` | 按文本层码页推导 (没开文本层就按 `codepage`) | 932→128 936→134 950→136 949→129 1252→0 65001→默认 |
 | `[nls] virtualize_files` | `1` | |
 | `[nls] text_codepage` | `0` (文本层关) | **文字层单独一档**: 界面/剧本字节的解释码页。留 0 = 完全不碰字形与字体, 汉化包安全; 填 936/932/950/949/65001 = 打开 `CreateFontA`/`GetGlyphOutlineA`/`LoadStringA` 这层 |
 | `[nls] virtualize_ui` | 跟随 `text_codepage` | 显式写 0/1 可单独覆盖; 默认就是"文本层开了才开", 不破坏旧 ini |

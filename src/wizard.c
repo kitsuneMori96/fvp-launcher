@@ -51,7 +51,8 @@ static const LangItem k_lang[] = {
     { L"日本語（932 / Shift-JIS）",    932, 128 },
     { L"简体中文（936 / GBK）",        936, 134 },
     { L"繁體中文（950 / Big5）",       950, 136 },
-    { L"한국어（949）",                949, 129 }
+    { L"한국어（949）",                949, 129 },
+    { L"UTF-8（65001）",               65001, 1 }
 };
 #define N_LANG ((int)(sizeof(k_lang) / sizeof(k_lang[0])))
 

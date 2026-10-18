@@ -155,6 +155,8 @@ static fvpl_uint ci_charset_of(fvpl_uint cp) {
     case 949:  return 129;  /* HANGUL_CHARSET */
     case 950:  return 136;  /* CHINESEBIG5_CHARSET */
     case 1252: return 0;    /* ANSI_CHARSET */
+    case 65001:return 1;    /* UTF-8 没有对应的字体字符集: 它不是"某地的字库", 而是
+                             * 全覆盖的传输编码, 让系统按当前区域自己挑字体 (DEFAULT) */
     default:   return 1;    /* DEFAULT_CHARSET: 系统按当前区域自己挑 */
     }
 }
@@ -239,10 +241,6 @@ int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
     out->codepage = ci_is_auto(s)
                   ? g_host_acp
                   : (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"codepage", (fvpl_int)g_host_acp);
-    s = cfg_ini_get(ini, SEC_NLS, L"font_charset");
-    out->font_charset = ci_is_auto(s)
-                      ? ci_charset_of(out->codepage)
-                      : (fvpl_uint)cfg_ini_int(ini, SEC_NLS, L"font_charset", 0);
     /* 文本层: 留空 = 与 codepage 相同 (不做文本层转换);
      * 填了 = 游戏台词/标题所用的码页 (日文原版 932)。只影响字体/字形/文本 API。
      * 兼容旧键 font_fix = 1 (等价于"按 codepage 做字体修正")。 */

@@ -15,11 +15,21 @@ static int   s_base_ok = 0;
 static int   s_warned = 0;
 static FILE *s_log = NULL;
 
-void FvplLog(const char *what) {
+/* B 档 (把钩子绑进引擎自己的导入表) 时, 我们的 DllMain 跑在进程启动期、加载器锁里。
+ * 那时候开文件写日志, 万一杀软/外壳模块在文件回调里回头找加载器就要互等, 所以先把
+ * 日志攒在内存, 等后台线程起来一次性写盘 (见 dllmain.c 的 FvplLogEarlyFlush)。
+ * 槽位要够装下 DllMain 里"每个已加载模块一行"的 sweep 记录: 汉化版实测 75 个模块。 */
+#define FVPL_EARLY_MAX 256
+#define FVPL_EARLY_LEN 160
+static char s_early[FVPL_EARLY_MAX][FVPL_EARLY_LEN];
+static int  s_early_n = 0;
+static int  s_early_mode = 1;
+static LONG s_flushed = 0;
+
+static void FvplLogFile(const char *what) {
     SYSTEMTIME st;
     WCHAR dir[FVPL_MAX_PATH], lp[FVPL_MAX_PATH];
     DWORD n;
-    if (!what) return;
     if (!s_log) {
         n = GetModuleFileNameW(NULL, dir, FVPL_MAX_PATH);
         if (n == 0 || n >= FVPL_MAX_PATH) return;
@@ -32,6 +42,25 @@ void FvplLog(const char *what) {
     fprintf(s_log, "%04d-%02d-%02d %02d:%02d:%02d %s\n",
             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, what);
     fflush(s_log);
+}
+
+void FvplLog(const char *what) {
+    int i;
+    if (!what) return;
+    if (!s_early_mode) { FvplLogFile(what); return; }
+    if (s_early_n >= FVPL_EARLY_MAX) return;
+    for (i = 0; what[i] && i < FVPL_EARLY_LEN - 1; i++) s_early[s_early_n][i] = what[i];
+    s_early[s_early_n][i] = 0;
+    s_early_n++;
+}
+
+void FvplLogEarlyFlush(void) {
+    int i, n;
+    if (InterlockedCompareExchange(&s_flushed, 1, 0) != 0) return;
+    n = s_early_n;
+    s_early_n = 0;
+    s_early_mode = 0;               /* 先出攒模式, 否则下面写盘又攒回去 */
+    for (i = 0; i < n; i++) FvplLogFile(s_early[i]);
 }
 
 static void warn_once(const WCHAR *msg) {
@@ -263,6 +292,8 @@ void FvplInitOnce(void) {
     LONG want = InterlockedCompareExchange(&s_state, 1, 0);
     if (want == 0) do_init();
     while (s_state == 1) Sleep(1);
+    /* 到这里已经脱离加载器锁 (初始化只会由第一个 hook 或后台线程触发), 可以碰文件系统了 */
+    FvplLogEarlyFlush();
 }
 
 int FvplReady(void) {

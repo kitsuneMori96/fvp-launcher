@@ -1,6 +1,7 @@
 ; fvp-launcher.ini — 放在 FVPLauncher.exe 的同目录 (一般就是游戏目录)
 ; 这个文件可以完全没有: 没有它时按"内置默认值"跑 (等价于下面注释掉的写法)。
 ; 行首 ; 或 # 是注释。
+; 用 FVPBind.exe 绑过钩子的游戏 (目录里没有 FVPLauncher.exe) 读的是同一个文件、同一套默认值。
 
 [launcher]
 exe =                    ; 留空 = 扫描本目录, 挑出导入 shell32!SHGetFolderPathA 的 FVP 主程序
@@ -26,8 +27,13 @@ folder_ids = 5           ; 被改写的 CSIDL 列表 (5=Documents), 逗号分隔
 ;   只有"非日文区 Windows + 纯日文游戏"才需要 932 —— 那正是替代 Locale Emulator 的用法。
 ; font_charset = 128     ; GDI 字符集; 留空/删掉 = 按 codepage 推导 (932→128 936→134 950→136 949→129)
 virtualize_files = 1     ; 把 CreateFileA 等文件 API 换成按 codepage 解释的 W 版
-virtualize_ui = 0        ; 虚拟化 LoadStringA / MessageBoxA / CreateFontA / GetGlyphOutlineA (内置默认 0)
-; ↑ 汉化补丁自带文本层时 (如 さくら、もゆ。 的 filter.dll + libass) 必须保持 0:
-;   实测开着会让对话文本与标题栏错乱 —— 那类汉化自己 hook 了取字形/标题的路径, 不要再叠一层。
-;   纯日文原版游戏在非日文区系统上想正确显示日文, 才改成 1 (配合 codepage = 932)。
+; text_codepage = 936    ; 【文字层】单独一档: 界面/剧本字节用哪个码页变成字形。留空/0 = 完全不碰
+; ↑ codepage 管的是"系统 API 假装成哪个区域"(路径、句柄名), text_codepage 管的是"画面上的字怎么画"。
+;   FVP 引擎自己用 CreateFontA + GetGlyphOutlineA 逐字画文字, 字节→字形由字体 lfCharSet 决定:
+;   日文引擎本体 + 中文剧本 (常见于同人作品) 会出现"系统弹框正常、游戏里的字全乱码",
+;   这时光有 codepage = 936 不够 (机器本来就是 936, 等于空操作), 要写 text_codepage = 936。
+;   日文原版在非日文区系统上想正确显示日文 = 932; 想要 UTF-8 剧本 = 65001。
+;   汉化包自带文本层 (filter.dll + libass) 时必须保持 0, 否则两层叠加, 标题与对话一起错乱。
+virtualize_ui = 0        ; 虚拟化 LoadStringA / MessageBoxA / CreateFontA / GetGlyphOutlineA
+; ↑ 内置默认跟随 text_codepage (开了文本层才开); 显式写 0/1 可单独覆盖。
 lcid = 0                 ; 非 0 (如 0x411) 时让 lstrcmpiA 按该 locale 比较

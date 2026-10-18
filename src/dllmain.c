@@ -23,6 +23,11 @@ static void install(HMODULE host) {
     if (a + b + c <= 0) FvplLog("NO hook matched this host");
 }
 
+/* B 档用法 (FVPBind 把钩子写进引擎自己的导入表) 要求加载器能解析到一个真实的导出符号,
+ * 否则进程直接起不来 ("无法定位程序输入点")。引擎永远不会调用它。
+ * 保持 cdecl: stdcall 会导出成 _FvplAttach@0, 导入表里的名字就对不上了。 */
+int FvplAttach(void) { return 1; }
+
 /* 直接读 PEB 的模块链表:
  * DllMain 里不能 CreateToolhelp32Snapshot (它会再去拿 loader lock, 我们正持有),
  * 而汉化版的 filter.dll 是主程序的静态导入, 此刻已经在链表里了。

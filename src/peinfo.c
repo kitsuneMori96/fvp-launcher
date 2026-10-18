@@ -35,7 +35,7 @@ static int ci_a_ends(const char *s, const char *suffix) {
     return ci_a_eq(s + (ls - lf), suffix);
 }
 
-static int pe_layout(const unsigned char *b, unsigned int size, int *is32,
+int pe_layout(const unsigned char *b, unsigned int size, int *is32,
                      unsigned int *opt_dir, unsigned int *sec_off, unsigned int *n_sec) {
     unsigned int nt, opt, magic;
     if (!b || size < 0x40) return 0;
@@ -57,7 +57,7 @@ int pe_machine(const unsigned char *blob, unsigned int size) {
     return (int)rd16(blob + rd32(blob + 0x3C) + 4);
 }
 
-static int rva_to_off(const unsigned char *b, unsigned int size, unsigned int rva,
+int pe_rva_to_off(const unsigned char *b, unsigned int size, unsigned int rva,
                       unsigned int *out) {
     unsigned int sec_off, n_sec;
     if (!pe_layout(b, size, 0, 0, &sec_off, &n_sec)) return 0;
@@ -76,7 +76,7 @@ static int rva_to_off(const unsigned char *b, unsigned int size, unsigned int rv
 }
 
 /* 第 index 个数据目录的 RVA/大小 */
-static int data_dir(const unsigned char *b, unsigned int size, int index,
+int pe_data_dir(const unsigned char *b, unsigned int size, int index,
                     unsigned int *rva, unsigned int *len) {
     unsigned int od;
     if (!pe_layout(b, size, 0, &od, 0, 0)) return 0;
@@ -92,8 +92,8 @@ int pe_has_import(const unsigned char *blob, unsigned int size,
     unsigned long long ordflag;
     if (!blob || !dll_name || !func_name) return 0;
     if (!pe_layout(blob, size, (int *)&is32, 0, 0, 0)) return 0;
-    if (!data_dir(blob, size, 1, &rva, &len) || !rva) return 0;
-    if (!rva_to_off(blob, size, rva, &io)) return 0;
+    if (!pe_data_dir(blob, size, 1, &rva, &len) || !rva) return 0;
+    if (!pe_rva_to_off(blob, size, rva, &io)) return 0;
     tsize = is32 ? 4u : 8u;
     ordflag = is32 ? 0x80000000ULL : 0x8000000000000000ULL;
 
@@ -102,15 +102,15 @@ int pe_has_import(const unsigned char *blob, unsigned int size,
         if (!ok(desc, 20, size)) return 0;
         name_rva = rd32(blob + desc + 12);
         if (!name_rva) return 0;                      /* 描述符表结束 */
-        if (!rva_to_off(blob, size, name_rva, &nameoff)) return 0;
+        if (!pe_rva_to_off(blob, size, name_rva, &nameoff)) return 0;
         if (!ci_a_ends((const char *)blob + nameoff, dll_name)) continue;
 
         int_rva = rd32(blob + desc);                  /* OriginalFirstThunk */
         iat_rva = rd32(blob + desc + 16);             /* FirstThunk */
         {
             unsigned int to = 0;
-            if (int_rva && rva_to_off(blob, size, int_rva, &to)) { /* 用 INT */ }
-            else if (iat_rva && rva_to_off(blob, size, iat_rva, &to)) { /* 退化成 IAT */ }
+            if (int_rva && pe_rva_to_off(blob, size, int_rva, &to)) { /* 用 INT */ }
+            else if (iat_rva && pe_rva_to_off(blob, size, iat_rva, &to)) { /* 退化成 IAT */ }
             else return 0;                            /* 只有序号或表丢失, 无法按名匹配 */
             for (unsigned int i = 0; ; i++) {
                 unsigned long long thunk;
@@ -119,7 +119,7 @@ int pe_has_import(const unsigned char *blob, unsigned int size,
                 thunk = is32 ? rd32(blob + to + i * 4) : rd64(blob + to + i * 8);
                 if (thunk == 0) return 0;             /* 该 DLL 的导入名表结束 */
                 if (thunk & ordflag) continue;        /* 按序号导入, 无名可比 */
-                if (!rva_to_off(blob, size, (unsigned int)thunk, &noff)) return 0;
+                if (!pe_rva_to_off(blob, size, (unsigned int)thunk, &noff)) return 0;
                 if (!ok(noff, 3, size)) return 0;
                 if (ci_a_eq((const char *)blob + noff + 2, func_name)) return 1;
             }
@@ -169,8 +169,8 @@ static int res_first_lang(const unsigned char *b, unsigned int size, unsigned in
 int pe_resource_lang(const unsigned char *b, unsigned int size) {
     unsigned int res_rva, res_len, root, n, ebase, i, lang;
     if (!b || size < 0x40 || rd16(b) != 0x5A4D) return 0;              /* MZ */
-    if (!data_dir(b, size, 2, &res_rva, &res_len) || !res_rva || !res_len) return 0;
-    if (!rva_to_off(b, size, res_rva, &root)) return 0;
+    if (!pe_data_dir(b, size, 2, &res_rva, &res_len) || !res_rva || !res_len) return 0;
+    if (!pe_rva_to_off(b, size, res_rva, &root)) return 0;
     if (!res_dir(b, size, root, &n, &ebase)) return 0;
 
     /* 1) 优先 RT_VERSION (16) */

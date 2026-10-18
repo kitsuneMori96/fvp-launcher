@@ -6,6 +6,7 @@
 #include "../src/utf8w.h"
 #include "../src/config.h"
 #include "../src/peinfo.h"
+#include "../src/bindpe.h"
 
 static int fails = 0, checks = 0;
 
@@ -178,11 +179,80 @@ static void t_pe(const char *path) {
     CHECK(pe_machine(buf, 10) == -1, "truncated header refused");
 }
 
+static unsigned int b32(const unsigned char *b) {
+    return (unsigned int)b[0] | ((unsigned int)b[1] << 8) |
+           ((unsigned int)b[2] << 16) | ((unsigned int)b[3] << 24);
+}
+
+static void t_bind(const char *path) {
+    FILE *f = fopen(path, "rb");
+    static unsigned char buf[4 * 1024 * 1024];
+    static unsigned char junk[0x2000];
+    unsigned int cap, n, sz;
+    size_t r;
+    char err[256];
+    int is32 = -1, ndll = -1, ndll2 = -1, slack = -1, already = -1;
+    unsigned int irva = 0, ilen = 0, io = 0, off = 0, last;
+    if (!f) { printf("SKIP bind tests (%s missing)\n", path); return; }
+    r = fread(buf, 1, sizeof(buf) - 0x4000, f);
+    fclose(f);
+    n = (unsigned)r;
+    cap = n + 0x4000;
+
+    CHECK(pe_bind_inspect(buf, n, "fvpl_hook.dll", &is32, &ndll, &slack, &already) == 1,
+          "inspect 认得这个 exe");
+    CHECK(already == 0, "干净 exe 报未绑定");
+    CHECK(slack >= 40, "头部留得下再加一节");
+
+    CHECK(pe_bind_apply(buf, cap, &n, "a\\b.dll", "FvplAttach", err, 256) == FVPL_BIND_FAIL,
+          "带路径的 DLL 名被拒绝");
+    CHECK(pe_bind_apply(buf, n, &n, "fvpl_hook.dll", "FvplAttach", err, 256) == FVPL_BIND_FAIL,
+          "容量不够时拒绝写入");
+    memset(junk, 0, sizeof(junk));
+    {
+        unsigned int jn = 0x1000;
+        CHECK(pe_bind_apply(junk, sizeof(junk), &jn, "fvpl_hook.dll", "FvplAttach",
+                            err, 256) == FVPL_BIND_FAIL, "全零垃圾镜像被拒绝");
+    }
+
+    sz = n;
+    CHECK(pe_bind_apply(buf, cap, &sz, "fvpl_hook.dll", "FvplAttach", err, 256) == FVPL_BIND_OK,
+          "绑定成功");
+    CHECK(pe_has_import(buf, sz, "fvpl_hook.dll", "FvplAttach") == 1, "新依赖可被查到");
+    CHECK(pe_has_import(buf, sz, "shell32.dll", "SHGetFolderPathA") == 1,
+          "搬表后原有导入一条不少");
+    CHECK(pe_bind_inspect(buf, sz, "fvpl_hook.dll", &is32, &ndll2, &slack, &already) == 1 &&
+          already == 1 && ndll2 == ndll + 1, "绑定后描述符表多一项且标记已绑");
+    CHECK(pe_bind_apply(buf, cap, &sz, "fvpl_hook.dll", "FvplAttach", err, 256)
+              == FVPL_BIND_ALREADY, "重复绑定是幂等的");
+
+    /* 导入目录现在必须指向新节里的表, 且最后一项的 DLL 名就是 fvpl_hook.dll */
+    CHECK(pe_data_dir(buf, sz, 1, &irva, &ilen) == 1 && irva != 0, "导入目录仍可读");
+    CHECK(pe_rva_to_off(buf, sz, irva, &io) == 1, "导入目录对得到文件偏移");
+    last = io + (unsigned)ndll * 20u;
+    CHECK(b32(buf + last + 12) != 0 && pe_rva_to_off(buf, sz, b32(buf + last + 12), &off) == 1 &&
+          strcmp((const char *)buf + off, "fvpl_hook.dll") == 0, "新导入项写着 fvpl_hook.dll");
+    CHECK(b32(buf + last + 16) != 0 && pe_rva_to_off(buf, sz, b32(buf + last + 16), &off) == 1,
+          "新 IAT 落在镜像内 (加载器要写它)");
+    /* 按加载器的走法逐级解引用: 描述符 -> INT 表 -> thunk -> IMAGE_IMPORT_BY_NAME */
+    {
+        unsigned int io2 = 0, thunk = 0;
+        CHECK(pe_rva_to_off(buf, sz, b32(buf + last), &io2) == 1, "INT 表能定位到文件");
+        thunk = b32(buf + io2);
+        CHECK(thunk != 0 && pe_rva_to_off(buf, sz, thunk, &off) == 1 &&
+              strcmp((const char *)buf + off + 2, "FvplAttach") == 0, "按名导入 FvplAttach");
+        CHECK(b32(buf + io2 + (is32 ? 4 : 8)) == 0, "INT 表以 0 收尾");
+    }
+    CHECK(b32(buf + io + (unsigned)(ndll + 1) * 20u + 12) == 0, "表尾仍有空描述符收尾");
+    CHECK(pe_data_dir(buf, sz, 11, &irva, &ilen) == 1 && irva == 0 && ilen == 0,
+          "绑定导入表已清空 (否则会按陈旧信息比对)");
+}
+
 int main(int argc, char **argv) {
     t_path();
     t_utf8();
     t_config();
-    if (argc > 1) t_pe(argv[1]);
+    if (argc > 1) { t_pe(argv[1]); t_bind(argv[1]); }
     printf("checks=%d fails=%d\n", checks, fails);
     return fails ? 1 : 0;
 }

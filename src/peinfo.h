@@ -16,4 +16,20 @@ int pe_has_import(const unsigned char *blob, unsigned int size,
  * 全程边界校验, 畸形文件不会崩; 找不到返回 0。 */
 int pe_resource_lang(const unsigned char *blob, unsigned int size);
 
+/* ---- 供 bindpe.c 复用的解析原语 (同一套布局规则, 避免两处各写一遍而跑偏) ----
+ * 全部带边界校验, 任何越界返回 0。 */
+
+/* 定位 NT 头之后的关键位置: is32=TRUE 表示 PE32, opt_dir=数据目录起点,
+ * sec_off=节表起点, n_sec=节数量。 */
+int pe_layout(const unsigned char *b, unsigned int size, int *is32,
+              unsigned int *opt_dir, unsigned int *sec_off, unsigned int *n_sec);
+
+/* RVA -> 文件偏移。落在任何节的"已存在数据"范围外则返回 0。 */
+int pe_rva_to_off(const unsigned char *b, unsigned int size, unsigned int rva,
+                  unsigned int *out);
+
+/* 第 index 个数据目录的 RVA/大小 (index 1 = 导入表, 11 = 绑定导入表)。 */
+int pe_data_dir(const unsigned char *b, unsigned int size, int index,
+                unsigned int *rva, unsigned int *len);
+
 #endif /* FVPL_PEINFO_H */

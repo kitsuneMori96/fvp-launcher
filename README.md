@@ -11,6 +11,7 @@
 | `FVPLauncher.exe` | 找到游戏主程序 → `CREATE_SUSPENDED` 起进程 → 注入 `fvpl_hook.dll` → 放行 |
 | `fvpl_hook.dll` | 只改游戏主模块的**导入表** (IAT hook), 实现存档重定向 + 代码页虚拟化 |
 | `FVPIcon.exe` | 独立的换图标小工具: 把 `.ico` 写进任意 exe 的图标资源 (见 [换图标](#换图标)) |
+| `FVPBind.exe` | 把钩子 DLL 写进游戏主程序自己的导入表, 从此不需要 `FVPLauncher.exe` (见 [B 档](#b-档目录里只留一个-exe--fvpbindexe)) |
 | `fvp-launcher.ini` | 配置, 与 `FVPLauncher.exe` 同目录; 没有也能跑 (全默认值) |
 
 x86 / x64 各一套 (`dist/x86`, `dist/x64`), 位数必须和游戏 exe 一致, 启动器会校验并拒绝错配。
@@ -19,6 +20,9 @@ x86 / x64 各一套 (`dist/x86`, `dist/x64`), 位数必须和游戏 exe 一致, 
 
 游戏 exe 一个字节都不改, 与汉化组 `filter.dll` 自带的 Detours 补丁不冲突, 删掉注入的 DLL 即完全回滚。
 FVP 引擎的所有外部调用都走导入表, IAT 足够。
+
+(用 `FVPBind.exe` 的 [B 档](#b-档目录里只留一个-exe--fvpbindexe) 是这套"零修改"唯一的例外:
+它把同样的 IAT 思路做在文件上, 换来的是"目录里只有一个 exe"。撤销用 `-restore`, 字节级还原。)
 
 ## 汉化版的链式启动 → 延迟注入
 
@@ -59,7 +63,8 @@ child injection deferred to FVPLauncher.exe
 `fvp-launcher.ini` 可以没有, 此时按本机环境自动推断 (见下)。要精细适配再放一份 ini。
 汉化版 (带 `SakuraChs.exe` 的) 把 `[launcher] exe` 写成链的最外层并开 `inject_children = 1`。
 
-配置项见 `fvp-launcher.ini.example`。最常用两档:
+配置项见 `fvp-launcher.ini.example`。不想让玩家碰启动器, 就用 `FVPBind.exe` 把钩子绑进游戏本体,
+目录里只留一个 exe (见 [B 档](#b-档目录里只留一个-exe--fvpbindexe))。存档最常用两档:
 
 ```ini
 [save]
@@ -87,7 +92,8 @@ migrate = 1
 | `[nls] codepage` | **本机真实 ACP** | 中文 Windows = 936。谎报别的值会破坏非 ASCII 路径的 A↔W 往返 (见实测样例) |
 | `[nls] font_charset` | 按 codepage 推导 | 932→128 936→134 950→136 949→129 1252→0 |
 | `[nls] virtualize_files` | `1` | |
-| `[nls] virtualize_ui` | `0` | 默认不动界面文字 —— 汉化文本层要 0, 日文原版要 1, 无法两全, 所以默认不碰 |
+| `[nls] text_codepage` | `0` (文本层关) | **文字层单独一档**: 界面/剧本字节的解释码页。留 0 = 完全不碰字形与字体, 汉化包安全; 填 936/932/950/949/65001 = 打开 `CreateFontA`/`GetGlyphOutlineA`/`LoadStringA` 这层 |
+| `[nls] virtualize_ui` | 跟随 `text_codepage` | 显式写 0/1 可单独覆盖; 默认就是"文本层开了才开", 不破坏旧 ini |
 | `[nls] lcid` | `0` | |
 
 ## 构建
@@ -98,8 +104,8 @@ migrate = 1
 ```
 
 依赖 `gcc`、`mingw-w64` (`i686-w64-mingw32-gcc` / `x86_64-w64-mingw32-gcc`)。
-纯逻辑模块 (`pathutil` `utf8w` `config` `peinfo`) 不依赖 `windows.h`, 直接在 WSL 上用 host gcc 单测,
-测试里会拿真实 `Sakura.exe` 校验 PE 解析和导入指纹。
+纯逻辑模块 (`pathutil` `utf8w` `config` `peinfo` `bindpe`) 不依赖 `windows.h`, 直接在 WSL 上用 host gcc 单测,
+测试里会拿真实 `Sakura.exe` 校验 PE 解析和导入指纹, 并在内存里完整跑一遍 B 档的绑定/回读。
 
 ## 按游戏单独适配 (每游戏一份 ini)
 
@@ -157,6 +163,58 @@ virtualize_ui = 0
   只有"非日文区 Windows + 纯日文引擎"才填 932。
 - 这个游戏没有 `SakuraChs.exe` 那样的 `CREATE_SUSPENDED` 链, `inject_children` 保持默认 1 即可
   (只有链式启动的汉化版才走 `--inject-ready` 延迟注入)。
+
+实测样例 —— **同人作品: 日文引擎本体 + 中文剧本** (祈愿与仲夏日之梦, 主程序 `Sakura_cn.exe`):
+
+```ini
+[launcher]
+exe = Sakura_cn.exe
+
+[nls]
+codepage = 936
+text_codepage = 936      ; 关键: 不写这行文字会乱码
+font_charset = 134
+
+[save]
+redirect = 1
+path = .save
+migrate = 1
+```
+
+- 这类作品**没有**汉化组的 `filter.dll` 文本层: exe 是日文原版引擎编译出来的, 它自己用
+  `GetGlyphOutlineA` + `CreateFontA` 逐字画面上所有文字, 字节→字形的映射表由字体的
+  `lfCharSet` 决定。剧本换成了中文 GBK 字节, 而字体还是引擎默认的日文 charset, 结果就是
+  "系统弹框正常 (那是 Windows 自己画的), 只有游戏画面和标题里的字乱码"。
+- `codepage = 936` 单独不够 —— 它管的是系统 API 的字节语义, 而这台机器本来就是 936,
+  等于空操作。**必须显式开 `text_codepage = 936`**, 让钩子把 `CreateFontA` 重建成
+  charset 134 (GB2312)、把 `GetGlyphOutlineA` 的字节对按 936 转成宽字符再取字形。
+- 默认 `text_codepage = 0` 是刻意的: 见上面汉化版那条, 两层不能同时开。
+
+## B 档: 目录里只留一个 exe —— `FVPBind.exe`
+
+A 档 (默认) 目录里是「游戏.exe + `FVPLauncher.exe` + `fvpl_hook.dll` + ini」, 玩家要双击启动器。
+B 档把钩子 DLL 直接写进**游戏主程序自己的导入表** (加一条 `.fvpl` 节 + 一个导入描述符),
+于是目录里只剩「游戏.exe + `fvpl_hook.dll` + ini」, 双击游戏本体就等于走了启动器。
+分发出去的包和原版长得一样。
+
+```bat
+FVPBind.exe Sakura.exe -check          :: 只体检: 位数 / 导入几座 DLL / 头部空位 / 绑过没有
+FVPBind.exe Sakura.exe                 :: 就地绑 (先自动留 Sakura.exe.bak)
+FVPBind.exe Sakura.exe -o 我的游戏.exe  :: 另存一份, 原文件不动
+FVPBind.exe Sakura.exe -restore        :: 撤销, 字节级还原成 .bak
+```
+
+- **这一步真的改了 exe 本体**, 和启动器"只改内存里的导入表"不同, 所以备份是强制的:
+  `.bak` 留不下来就一个字都不写。体检不过 (节表后面空位不足 / 非 PE / 没有导入表) 会明确
+  告诉你退回 A 档。
+- 绑完必须把 `fvpl_hook.dll` 放到 exe 同目录, 否则 Windows 会报"找不到 xxx.dll"启动不了
+  (工具绑成功后会检查并提醒)。
+- 加了导入项会让 exe 的**数字签名和自校验失效**。FVP 引擎没有自校验 (实测绑完照常跑),
+  但带完整性检查的外壳可能拒绝启动 —— 遇到就退回 A 档。
+- 绑过的 exe 仍然可以照常用 `FVPLauncher.exe` 启动 (加载器对同一个 DLL 只加载一次),
+  所以先绑后测、随时回退都不冲突。
+- 钩子 DLL 的 `DllMain` 里不能开文件 (会死锁加载器锁), 因此进程初始化阶段的日志先在内存里
+  攒着, 初始化结束再一次性写进 `fvpl_hook.log`。B 档全靠这条约定才拿得到日志。
 
 ## 换图标
 

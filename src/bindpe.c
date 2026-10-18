@@ -287,3 +287,28 @@ int pe_bind_apply(unsigned char *buf, unsigned int cap, unsigned int *size,
     *size = raw_off + raw_len;
     return FVPL_BIND_OK;
 }
+
+/* 目标 exe 里有没有 FVPBind 留下的 .fvpl 节 (只看节名, 与绑的 DLL 叫什么无关)。
+ * 为什么要有这个判断: 换图标走的是 Win32 资源重写, 它会把 .rsrc 之后每一节的
+ * RVA 重新排一遍 —— .fvpl 里那张导入表的地址全是按绑定当时的 RVA 写死的, 一节
+ * 被挪走, 导入目录就指向不存在的地址, exe 连启动都启动不了。
+ * 所以顺序只能是「先换图标, 再绑定」, 由 FVPIcon 在动手前挡掉反过来做的情况。
+ * 只读, 畸形文件返回 0。 */
+int pe_bind_has_marker(const unsigned char *buf, unsigned int size) {
+    static const unsigned char want[8] = { '.', 'f', 'v', 'p', 'l', 0, 0, 0 };
+    unsigned int opt_dir, sec_off, n_sec;
+    int is32;
+    if (!buf || size < 0x1000 || rd16(buf) != 0x5A4D) return 0;
+    if (!pe_layout(buf, size, &is32, &opt_dir, &sec_off, &n_sec)) return 0;
+    if (n_sec == 0 || n_sec >= 512) return 0;
+    {
+        unsigned int i;
+        for (i = 0; i < n_sec; i++) {
+            unsigned long long s = (unsigned long long)sec_off +
+                                   (unsigned long long)i * SEC_HDR_SIZE;
+            if (s + SEC_HDR_SIZE > size) return 0;
+            if (memcmp(buf + s, want, sizeof(want)) == 0) return 1;
+        }
+    }
+    return 0;
+}

@@ -6,13 +6,15 @@
  *
  * 做法: 解出 .ico 的每张图 -> 写进 exe 的 RT_ICON (ID = 1..count);
  *       再拼一份 RT_GROUP_ICON (ID 1) 指回这些 ID;
- *       写之前先把旧图标组 (RT_GROUP_ICON 1 及其引用的 RT_ICON) 删掉。
- * 备注: 资源语言一律用 0 (neutral), 与系统"改图标"工具一致。
+ *       写之前把 exe 里**所有**旧图标资源 (任意 ID、任意语言) 全删掉。
+ * 备注: 资源语言跟着目标原有图标组的语言写 (日文引擎那组是 ID 104 / 语言 1041,
+ *       只当 ID 1 / 语言 0 的话旧组删不掉, 换完 exe 里会躺着两组图标)。
  */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include "../src/bindpe.h"
 
 /* 磁盘上的图标结构都是紧凑排布的, 用 pack(1) 避免编译器插入对齐填充 */
 #pragma pack(push, 1)
@@ -72,34 +74,51 @@ static unsigned char *read_file(const WCHAR *path, DWORD *size) {
     return buf;
 }
 
-/* 读目标文件里现有的图标组, 收集它引用的 RT_ICON ID (供删除)。
- * 返回 ID 个数; 文件不是 PE / 没有图标组都返回 0 (不是错误)。
- * *found 置 1 表示确实存在 RT_GROUP_ICON(1) 资源; 只有这时才允许删旧资源 ——
- * 对不存在的资源调 UpdateResourceW(…, NULL, 0) 会把整个更新会话搞坏
- * (后续 UpdateResourceW 全以 ERROR_INTERNAL_ERROR(1359) 失败)。 */
-static int collect_old_icon_ids(const WCHAR *path, WORD *ids, int cap, int *found) {
+/* 枚举结果: (资源 ID, 语言) 成对收集。具名资源不收集 (图标组都按 ID 寻址)。 */
+#define RES_CAP 512
+typedef struct { WORD id[RES_CAP]; WORD lang[RES_CAP]; int n; int overflow; } ResList;
+
+static BOOL CALLBACK add_lang(HMODULE h, LPCWSTR type, LPCWSTR name, WORD lang, LONG_PTR l) {
+    ResList *L = (ResList *)l;
+    int i;
+    (void)h; (void)type;
+    if (!IS_INTRESOURCE(name)) return TRUE;
+    for (i = 0; i < L->n; i++)
+        if (L->id[i] == (WORD)(UINT_PTR)name && L->lang[i] == lang) return TRUE;
+    if (L->n >= RES_CAP) { L->overflow = 1; return TRUE; }
+    L->id[L->n] = (WORD)(UINT_PTR)name;
+    L->lang[L->n] = lang;
+    L->n++;
+    return TRUE;
+}
+
+static BOOL CALLBACK add_id(HMODULE h, LPCWSTR type, LPWSTR name, LONG_PTR l) {
+    (void)type;
+    if (!IS_INTRESOURCE(name)) return TRUE;
+    EnumResourceLanguagesW(h, type, name, add_lang, l);
+    return TRUE;
+}
+
+static void list_all(HMODULE h, LPCWSTR type, ResList *L) {
+    L->n = 0;
+    L->overflow = 0;
+    EnumResourceNamesW(h, type, add_id, (LONG_PTR)L);
+}
+
+/* 列出目标 exe 里现有的全部图标资源 (任意 ID / 任意语言)。
+ * 文件不是 PE / 一个图标都没有 = 空列表, 不算错误。
+ * 溢出 (图标条目多到 512 条) 才算失败: 那样会删不干净, 宁可不动。 */
+static int collect_icons(const WCHAR *path, ResList *grp, ResList *ico, const WCHAR **why) {
     HMODULE h = LoadLibraryExW(path, NULL, LOAD_LIBRARY_AS_DATAFILE);
-    int nold = 0;
-    *found = 0;
-    if (!h) return 0;
-    {
-        HRSRC r = FindResourceW(h, MAKEINTRESOURCEW(1), RT_GROUP_ICON);
-        if (r) {
-            *found = 1;
-            DWORD sz = SizeofResource(h, r);
-            HGLOBAL g = LoadResource(h, r);
-            void *p = g ? LockResource(g) : NULL;
-            if (p && sz >= sizeof(IcoHdr) && ((IcoHdr *)p)->type == 1) {
-                int n = (int)((IcoHdr *)p)->count;
-                if (((DWORD)(sizeof(IcoHdr) + (size_t)n * sizeof(GrpEnt))) <= sz) {
-                    const GrpEnt *ge = (const GrpEnt *)((const char *)p + sizeof(IcoHdr));
-                    for (int i = 0; i < n && nold < cap; i++) ids[nold++] = ge[i].nID;
-                }
-            }
-        }
-    }
+    if (!h) return 1;
+    list_all(h, RT_GROUP_ICON, grp);
+    list_all(h, RT_ICON, ico);
     FreeLibrary(h);
-    return nold;
+    if (grp->overflow || ico->overflow) {
+        *why = L"这个 exe 的图标条目多到处理不完（超过 512 条），为免留下半套旧图标没有改动";
+        return 0;
+    }
+    return 1;
 }
 
 /* 把 buf 里的 .ico 全部写进 work 的 RT_ICON + RT_GROUP_ICON, 顺便删掉旧图标组。
@@ -107,29 +126,33 @@ static int collect_old_icon_ids(const WCHAR *path, WORD *ids, int cap, int *foun
 static int replace_icons(const WCHAR *work, const unsigned char *buf,
                          const IcoEnt *ent, int count, const WCHAR **why) {
     static WCHAR ebuf[128];
-    WORD old_ids[MAX_ICONS];
-    int found = 0;
-    int nold = collect_old_icon_ids(work, old_ids, MAX_ICONS, &found);
+    ResList grp, ico;
+    WORD write_lang = 0;
     HANDLE hu;
     unsigned char *gb;
     int gsize, i;
     int ok = 1;
     DWORD err = 0;
 
+    if (!collect_icons(work, &grp, &ico, why)) return 0;
+    if (grp.n > 0) write_lang = grp.lang[0];   /* 跟着目标原有语言写, 免得混进第三种语言 */
+
     hu = BeginUpdateResourceW(work, FALSE);
     if (!hu) { *why = L"打不开目标文件（只读、被占用或不是有效的 exe）"; return 0; }
 
-    /* 先删旧: 组所引用的每个 RT_ICON, 再删组本身 (语言 0)。
-     * 注意: 只有确实存在旧图标组时才删 —— 删除不存在的资源会破坏更新会话。 */
-    if (found) {
-        for (i = 0; i < nold; i++)
-            UpdateResourceW(hu, RT_ICON, MAKEINTRESOURCEW(old_ids[i]), 0, NULL, 0);
-        UpdateResourceW(hu, RT_GROUP_ICON, MAKEINTRESOURCEW(1), 0, NULL, 0);
-    }
+    /* 先删旧: 文件里**所有**图标组和图标条目 (任意 ID、任意语言)。
+     * 只删枚举到确实存在的 —— 对不存在的资源调 UpdateResourceW(…, NULL, 0)
+     * 会把整个更新会话搞坏 (后续写入全以 ERROR_INTERNAL_ERROR(1359) 失败)。
+     * 以前只删 "RT_GROUP_ICON(1) + 语言 0", 而日文引擎那组是 ID 104 / 语言 1041,
+     * 结果旧组根本没删掉, 换完图标 exe 里躺着两组, 资源管理器还显示旧的。 */
+    for (i = 0; i < ico.n; i++)
+        UpdateResourceW(hu, RT_ICON, MAKEINTRESOURCEW(ico.id[i]), ico.lang[i], NULL, 0);
+    for (i = 0; i < grp.n; i++)
+        UpdateResourceW(hu, RT_GROUP_ICON, MAKEINTRESOURCEW(grp.id[i]), grp.lang[i], NULL, 0);
 
     /* 写每张图: ID = 1..count */
     for (i = 0; i < count && ok; i++) {
-        if (!UpdateResourceW(hu, RT_ICON, MAKEINTRESOURCEW(i + 1), 0,
+        if (!UpdateResourceW(hu, RT_ICON, MAKEINTRESOURCEW(i + 1), write_lang,
                              (LPVOID)(buf + ent[i].dwImageOffset),
                              ent[i].dwBytesInRes)) {
             ok = 0;
@@ -162,7 +185,8 @@ static int replace_icons(const WCHAR *work, const unsigned char *buf,
                 ge.nID = (WORD)(i + 1);
                 memcpy(gb + sizeof(gh) + (size_t)i * sizeof(ge), &ge, sizeof(ge));
             }
-            if (!UpdateResourceW(hu, RT_GROUP_ICON, MAKEINTRESOURCEW(1), 0, gb, (DWORD)gsize)) {
+            if (!UpdateResourceW(hu, RT_GROUP_ICON, MAKEINTRESOURCEW(1), write_lang,
+                                 gb, (DWORD)gsize)) {
                 ok = 0;
                 err = GetLastError();
             }
@@ -242,6 +266,26 @@ int wmain(int argc, wchar_t *argv[]) {
             sp += _snwprintf(sizes + sp, 2048 - sp, i ? L", %dx%d" : L"%dx%d", w, hh);
         }
         outw(L"图标: %d 张 (%s)\n", count, sizes);
+    }
+
+    /* B 档绑过的 exe 不能直接换图标: 资源重写会重排节地址, 绑好的导入表会指向
+     * 失效的 RVA, 游戏 exe 当场起不来。让它先撤销, 换完图标再绑回去。 */
+    {
+        DWORD tsize = 0;
+        unsigned char *tbuf = read_file(target, &tsize);
+        if (tbuf && pe_bind_has_marker(tbuf, tsize)) {
+            free(tbuf);
+            outw(L"换了失败: 这个 exe 已经做过 B 档绑定, 现在换图标会把它的导入表挪位, "
+                 L"游戏会打不开。\n"
+                 L"请按这个顺序来:\n"
+                 L"  1) FVPBind.exe \"%s\" -restore\n"
+                 L"  2) FVPIcon.exe \"%s\" \"%s\"\n"
+                 L"  3) FVPBind.exe \"%s\"\n",
+                 target, target, icopath, target);
+            free(buf);
+            return 1;
+        }
+        free(tbuf);
     }
 
     /* 备份 / 复制到输出 */

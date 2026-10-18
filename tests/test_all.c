@@ -212,6 +212,9 @@ static void t_bind(const char *path) {
           "inspect 认得这个 exe");
     CHECK(already == 0, "干净 exe 报未绑定");
     CHECK(slack >= 40, "头部留得下再加一节");
+    CHECK(pe_bind_has_marker(buf, n) == 0, "未绑定的 exe 没有 .fvpl 节标记");
+    memset(junk, 'x', sizeof(junk));
+    CHECK(pe_bind_has_marker(junk, sizeof(junk)) == 0, "畸形输入不会误报节标记");
 
     CHECK(pe_bind_apply(buf, cap, &n, "a\\b.dll", "FvplAttach", err, 256) == FVPL_BIND_FAIL,
           "带路径的 DLL 名被拒绝");
@@ -228,6 +231,7 @@ static void t_bind(const char *path) {
     CHECK(pe_bind_apply(buf, cap, &sz, "fvpl_hook.dll", "FvplAttach", err, 256) == FVPL_BIND_OK,
           "绑定成功");
     CHECK(pe_has_import(buf, sz, "fvpl_hook.dll", "FvplAttach") == 1, "新依赖可被查到");
+    CHECK(pe_bind_has_marker(buf, sz) == 1, "绑定后查得到 .fvpl 节标记");
     CHECK(pe_has_import(buf, sz, "shell32.dll", "SHGetFolderPathA") == 1,
           "搬表后原有导入一条不少");
     CHECK(pe_bind_inspect(buf, sz, "fvpl_hook.dll", &is32, &ndll2, &slack, &already) == 1 &&

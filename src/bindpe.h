@@ -29,4 +29,9 @@ int pe_bind_apply(unsigned char *buf, unsigned int cap, unsigned int *size,
 int pe_bind_inspect(const unsigned char *buf, unsigned int size, const char *dll_name,
                     int *is32, int *n_dlls, int *header_slack, int *already);
 
+/* 这个 exe 是否已被 FVPBind 绑过 (看 .fvpl 节名, 与绑的 DLL 名无关)。
+ * 换图标那类会重排节地址的改写必须先挡住它, 否则绑好的导入表会指向失效的 RVA。
+ * 只读, 畸形文件返回 0。 */
+int pe_bind_has_marker(const unsigned char *buf, unsigned int size);
+
 #endif /* FVPL_BINDPE_H */

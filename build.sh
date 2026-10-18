@@ -38,7 +38,8 @@ build_pair() {   # $1=arch(-m32/-m64) $2=编译器 $3=输出目录
         -o "$DIST/$out/fvpl_hook.dll" $HOOK src/config.c src/pathutil.c src/peinfo.c \
         src/utf8w.c -luser32 -lgdi32 -lshell32 -lole32 -luuid 2>&1 | tee -a "$LOG"
     test -f "$DIST/$out/fvpl_hook.dll"
-    "$cc-gcc" $TOOL_FLAGS -o "$DIST/$out/FVPIcon.exe" tools/fvpicon.c 2>&1 | tee -a "$LOG"
+    "$cc-gcc" $TOOL_FLAGS -o "$DIST/$out/FVPIcon.exe" tools/fvpicon.c src/bindpe.c src/peinfo.c \
+        2>&1 | tee -a "$LOG"
     test -f "$DIST/$out/FVPIcon.exe"
     "$cc-gcc" $TOOL_FLAGS -o "$DIST/$out/FVPBind.exe" tools/fvpbind.c src/bindpe.c src/peinfo.c \
         2>&1 | tee -a "$LOG"

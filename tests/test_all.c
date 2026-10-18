@@ -127,6 +127,15 @@ static void t_config(void) {
         CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.icon[0] == 0, "icon default empty");
     }
     {
+        /* [launcher] title: 原样存下, 不做路径解析; 缺省为空 = 不盖标题 */
+        FvplIni e;
+        cfg_ini_parse(L"[launcher]\ntitle = 祈愿与仲夏日之梦 ver1.1\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 &&
+              pv_ci_equal(c.title, L"祈愿与仲夏日之梦 ver1.1"), "title kept verbatim");
+        cfg_ini_parse(L"[launcher]\n", &e);
+        CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 1 && c.title[0] == 0, "title default empty");
+    }
+    {
         FvplIni e;
         cfg_ini_parse(L"[nls]\ncodepage=0\n", &e);
         CHECK(cfg_build(&e, L"C:\\g", &c, err, 128) == 0, "codepage 0 refused");

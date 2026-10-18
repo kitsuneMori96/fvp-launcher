@@ -186,6 +186,16 @@ static int WINAPI Hook_MessageBoxA(HWND hw, LPCSTR text, LPCSTR caption, UINT ty
     return MessageBoxW(hw, wt, wc, type);
 }
 
+/* [launcher] title: 作者写死的那句标题。中文作品里引擎自带的标题串常还是日文原版的
+ * 字节 (它内部按 932 转了一道), 单一 text_codepage 救不了 —— 中文台词要 936, 那句要 932。
+ * 所以直接盖掉, 与文本层开关无关。只管顶层窗口, 游戏内对话框照旧。 */
+static int force_title(HWND hw) {
+    if (g_cfg.title[0] == 0 || hw == NULL) return 0;
+    if (GetParent(hw) != NULL) return 0;
+    SetWindowTextW(hw, (LPCWSTR)g_cfg.title);
+    return 1;
+}
+
 static HWND WINAPI Hook_CreateWindowExA(DWORD exstyle, LPCSTR cls, LPCSTR title, DWORD style,
                                         int x, int y, int w, int h, HWND parent, HMENU menu,
                                         HINSTANCE inst, LPVOID lparam) {
@@ -193,7 +203,9 @@ static HWND WINAPI Hook_CreateWindowExA(DWORD exstyle, LPCSTR cls, LPCSTR title,
     WCHAR wt[512];
     hw = o_CreateWindowExA ? o_CreateWindowExA(exstyle, cls, title, style, x, y, w, h,
                                                parent, menu, inst, lparam) : NULL;
-    if (!ui_on() || hw == NULL || title == NULL || !title[0]) return hw;
+    if (hw == NULL) return hw;
+    if (force_title(hw)) return hw;
+    if (!ui_on() || title == NULL || !title[0]) return hw;
     if (FvplTextA2W(title, wt, 512) > 0) SetWindowTextW(hw, wt);
     return hw;
 }
@@ -202,6 +214,7 @@ static HWND WINAPI Hook_CreateWindowExA(DWORD exstyle, LPCSTR cls, LPCSTR title,
  * 系统按真实 ACP(936) 把 SJIS 串转成 W 就成乱码, 且这一步会覆盖建窗时的纠正。
  * 这里自己按虚拟代码页解码后转投 SendMessageW。只动 WM_SETTEXT, 其余原样透传。 */
 static LRESULT WINAPI Hook_SendMessageA(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_SETTEXT && lp != 0 && force_title(hw)) return TRUE;
     if (!ui_on() || o_SendMessageA == NULL)
         return o_SendMessageA ? o_SendMessageA(hw, msg, wp, lp) : 0;
     if (msg == WM_SETTEXT && lp != 0) {

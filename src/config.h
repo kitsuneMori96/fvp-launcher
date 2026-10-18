@@ -40,6 +40,7 @@ typedef struct {
     fvpl_uint  font_charset;    /* GDI charset, 128=SHIFTJIS 134=GB2312 136=Big5 */
     fvpl_wchar font_face[64];   /* 非空 = 连字型一起强制 (最多 31 字符) */
     fvpl_wchar icon[FVPL_MAX_PATH]; /* 非空 = 换成这个 .ico / .exe 的图标 (已解析为绝对路径) */
+    fvpl_wchar title[128];      /* 非空 = 窗口标题写死成这句 (中文作品的引擎原标题常是日文字节) */
     int        virtualize_files;
     int        virtualize_ui;
     fvpl_uint  lcid;            /* 0 = 不动 CompareStringA 的 locale */

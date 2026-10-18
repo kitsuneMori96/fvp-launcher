@@ -9,6 +9,10 @@ params =                 ; 附加命令行参数, 原样拼在 exe 路径后面
 workdir =                ; 留空 = 启动器所在目录
 inject_children = 1      ; 汉化版是 SakuraChs.exe -> Sakura.exe 链式启动, 需要 1 (内置默认 0)
 ; icon =                 ; 换游戏窗口图标: 填 .ico (或另一个 .exe) 的路径; 相对路径按游戏目录解析
+; title =                ; 写死窗口标题 (只作用于顶层窗口, 游戏内对话框不动)
+; ↑ 中文作品常遇到: 引擎自己那句标题是日文原版资源里的字, 它内部先按 932 转了一道才交给
+;   Windows, 于是"标题栏乱码、台词正常"。这种混排没有任何单一 text_codepage 能同时救
+;   (台词要 936、那句要 932), 把想显示的那句写在这里直接盖掉才是正解。
 
 [save]
 ; 整段省略 = redirect 1 / path userdata / migrate 1

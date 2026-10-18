@@ -179,6 +179,11 @@ int cfg_build(const FvplIni *ini, const fvpl_wchar *basedir, FvplConfig *out,
         pv_norm(out->workdir, FVPL_MAX_PATH);
     }
 
+    /* 标题写死: 引擎自己那份标题串是它内部按日文转道后的字节, 单一 text_codepage
+     * 救不了 (中文台词要 936, 那句是 932), 所以让作者直接把要显示的那句写进来 */
+    s = cfg_ini_get(ini, SEC_LAU, L"title");
+    if (s && *s) pv_copy(out->title, (int)(sizeof(out->title) / sizeof(fvpl_wchar)), s);
+
     /* 运行时换游戏窗口图标: 相对路径按上面 [launcher] 的规则对 basedir 解析 */
     s = cfg_ini_get(ini, SEC_LAU, L"icon");
     if (s && *s) {

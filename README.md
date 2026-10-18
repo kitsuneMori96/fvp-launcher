@@ -169,11 +169,11 @@ virtualize_ui = 0
 ```ini
 [launcher]
 exe = Sakura_cn.exe
+title = 祈愿与仲夏日之梦      ; 盖掉引擎那句日文原标题 (见下)
 
 [nls]
 codepage = 936
-text_codepage = 936      ; 关键: 不写这行文字会乱码
-font_charset = 134
+text_codepage = 0            ; 关键: 这台机器上必须关 (踩过, 见下)
 
 [save]
 redirect = 1
@@ -181,14 +181,14 @@ path = .save
 migrate = 1
 ```
 
-- 这类作品**没有**汉化组的 `filter.dll` 文本层: exe 是日文原版引擎编译出来的, 它自己用
-  `GetGlyphOutlineA` + `CreateFontA` 逐字画面上所有文字, 字节→字形的映射表由字体的
-  `lfCharSet` 决定。剧本换成了中文 GBK 字节, 而字体还是引擎默认的日文 charset, 结果就是
-  "系统弹框正常 (那是 Windows 自己画的), 只有游戏画面和标题里的字乱码"。
-- `codepage = 936` 单独不够 —— 它管的是系统 API 的字节语义, 而这台机器本来就是 936,
-  等于空操作。**必须显式开 `text_codepage = 936`**, 让钩子把 `CreateFontA` 重建成
-  charset 134 (GB2312)、把 `GetGlyphOutlineA` 的字节对按 936 转成宽字符再取字形。
-- 默认 `text_codepage = 0` 是刻意的: 见上面汉化版那条, 两层不能同时开。
+- **宿主 ACP 已经等于剧本文字的码页时, `text_codepage` 要留 0**。中文 Windows(936) 上跑中文
+  GBK 剧本本来就是自洽的, 开文本层没有任何收益; 而这个作品的引擎标题串是它内部按 932 转过
+  一道再交给 Windows 的, 开 936 会把这句连同"メッセージフォント"预览样张一起打成问号。
+  实测: `text_codepage = 0` 时窗口标题读到的是 `祈愿与仲夏日之梦` 8 个干净码点,
+  填 932 时变成 `?橳????????????`。
+- 剩下的"标题栏花屏"是**引擎自己那句日文原标题** (`さくら、もゆ。` 的 SJIS 字节被 936 系统
+  读成 GBK), 与码页配置无关 —— 用 `[launcher] title` 直接写死要显示的那句。
+- 只有"非日文区 Windows + 纯日文引擎"这种真需要转一层的情况才填 `text_codepage = 932`。
 
 ## B 档: 目录里只留一个 exe —— `FVPBind.exe`
 
@@ -238,6 +238,9 @@ FVPIcon.exe FVPLauncher.exe my.ico -o 我的启动器.exe   :: 另存为, 不动
 ```
 
 `my.ico` 里的多张尺寸会全部写进目标 (用于资源管理器在不同视图下选合适的尺寸)。
+
+**3) 窗口标题栏的文字** —— ini 里 `[launcher] title` 写死一句即可 (只作用于顶层窗口,
+游戏内对话框不动)。用于引擎自带标题是另一种码页、任何 `text_codepage` 都救不了的混排作品。
 
 ## 已知边界
 

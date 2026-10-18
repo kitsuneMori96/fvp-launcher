@@ -5,10 +5,11 @@
  *   给 -o  : 先 CopyFileW(目标, 输出, FALSE), 再改输出文件
  *
  * 做法: 解出 .ico 的每张图 -> 写进 exe 的 RT_ICON (ID = 1..count);
- *       再拼一份 RT_GROUP_ICON (ID 1) 指回这些 ID;
+ *       再拼一份 RT_GROUP_ICON 指回这些 ID, 沿用目标原有那组的 ID 与语言
+ *       (引擎代码是按自己的 ID 取图标的, 写成 ID 1 会让窗口图标退回系统默认);
  *       写之前把 exe 里**所有**旧图标资源 (任意 ID、任意语言) 全删掉。
- * 备注: 资源语言跟着目标原有图标组的语言写 (日文引擎那组是 ID 104 / 语言 1041,
- *       只当 ID 1 / 语言 0 的话旧组删不掉, 换完 exe 里会躺着两组图标)。
+ * 备注: 只当 ID 1 / 语言 0 的话旧组删不掉 (日文引擎那组是 ID 104 / 语言 1041),
+ *       换完 exe 里会躺着两组图标。
  */
 #include <windows.h>
 #include <stdio.h>
@@ -127,7 +128,7 @@ static int replace_icons(const WCHAR *work, const unsigned char *buf,
                          const IcoEnt *ent, int count, const WCHAR **why) {
     static WCHAR ebuf[128];
     ResList grp, ico;
-    WORD write_lang = 0;
+    WORD write_lang = 0, write_id = 1;
     HANDLE hu;
     unsigned char *gb;
     int gsize, i;
@@ -135,7 +136,16 @@ static int replace_icons(const WCHAR *work, const unsigned char *buf,
     DWORD err = 0;
 
     if (!collect_icons(work, &grp, &ico, why)) return 0;
-    if (grp.n > 0) write_lang = grp.lang[0];   /* 跟着目标原有语言写, 免得混进第三种语言 */
+    if (grp.n > 0) {
+        /* 跟着目标原有那组的 ID 和语言写。语言是为了不混进第三种语言; ID 更要紧 ——
+         * 引擎代码里是按自己那个 ID LoadIcon 的 (樱花/FAVORITE 是 104), 写成 ID 1
+         * 等于把它要的那组删了: 文件图标是新的, 窗口标题栏却退回系统默认图标。
+         * 旧组若被删的是 ID 1 (我们自己的启动器), 而新图占用了 1..count 这些 RT_ICON
+         * 号, 就把新组挪到 count+1, 总之不与残留条目撞号。 */
+        write_lang = grp.lang[0];
+        write_id = grp.id[0];
+        if (write_id >= 1 && write_id <= (WORD)count) write_id = (WORD)(count + 1);
+    }
 
     hu = BeginUpdateResourceW(work, FALSE);
     if (!hu) { *why = L"打不开目标文件（只读、被占用或不是有效的 exe）"; return 0; }
@@ -185,7 +195,7 @@ static int replace_icons(const WCHAR *work, const unsigned char *buf,
                 ge.nID = (WORD)(i + 1);
                 memcpy(gb + sizeof(gh) + (size_t)i * sizeof(ge), &ge, sizeof(ge));
             }
-            if (!UpdateResourceW(hu, RT_GROUP_ICON, MAKEINTRESOURCEW(1), write_lang,
+            if (!UpdateResourceW(hu, RT_GROUP_ICON, MAKEINTRESOURCEW(write_id), write_lang,
                                  gb, (DWORD)gsize)) {
                 ok = 0;
                 err = GetLastError();
